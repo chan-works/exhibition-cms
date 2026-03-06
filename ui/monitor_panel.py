@@ -93,50 +93,66 @@ class ServerLaunchWorker(QObject):
         self.finished.emit()
 
     def _try_winrm(self, host: str, user: str, password: str):
-        """Use PowerShell remoting (WinRM port 5985) to deploy and start the server."""
+        """
+        Use PowerShell PSSession (WinRM port 5985) to deploy and start the server.
+        Uses Copy-Item -ToSession to avoid command-line length limits.
+        """
         try:
-            b64 = base64.b64encode(SCREENSHOT_SERVER_PATH.read_bytes()).decode("ascii")
-
-            # Build credential block if credentials provided
-            if user and password:
-                cred_block = (
-                    f"$pw=ConvertTo-SecureString '{password}' -AsPlainText -Force;"
-                    f"$cred=New-Object PSCredential('{user}',$pw);"
-                )
-                session_args = f"-ComputerName {host} -Credential $cred"
-            else:
-                cred_block = ""
-                session_args = f"-ComputerName {host}"
-
-            # Add to TrustedHosts first
+            # Add to TrustedHosts
             subprocess.run(
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
                  f"Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value '{host}' -Force -Concatenate"],
                 capture_output=True, timeout=10
             )
 
-            # Remote script: decode b64 → write file → install packages → start server
-            remote_script = (
-                f"$b='{b64}';"
-                "$p=\"$env:USERPROFILE\\ExhibitionCMS\\screenshot_server.py\";"
-                "[IO.Directory]::CreateDirectory(\"$env:USERPROFILE\\ExhibitionCMS\")|Out-Null;"
-                "[IO.File]::WriteAllBytes($p,[Convert]::FromBase64String($b));"
-                "python -m pip install mss pillow --quiet 2>$null;"
-                "$s=\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\";"
-                "\"@echo off`nstart `\"`\" /B pythonw `\"$p`\"\"|Set-Content \"$s\\ExhibitionCMS-ScreenServer.bat\";"
-                "taskkill /F /IM pythonw.exe 2>$null;"
-                "Start-Process pythonw -ArgumentList $p -WindowStyle Hidden;"
-                "\"서버 시작 완료: $p\""
+            local = str(SCREENSHOT_SERVER_PATH).replace("'", "''")
+
+            if user and password:
+                pw = password.replace("'", "''")
+                cred_ps = (
+                    f"$pw=ConvertTo-SecureString '{pw}' -AsPlainText -Force;"
+                    f"$cred=New-Object PSCredential('{user}',$pw);"
+                )
+                session_new = f"New-PSSession -ComputerName {host} -Credential $cred"
+            else:
+                cred_ps = ""
+                session_new = f"New-PSSession -ComputerName {host}"
+
+            ps_cmd = (
+                f"{cred_ps}"
+                f"$s={session_new};"
+                # Create remote directory
+                f"Invoke-Command -Session $s -ScriptBlock {{"
+                f"New-Item -ItemType Directory -Path \"$env:USERPROFILE\\ExhibitionCMS\" -Force|Out-Null"
+                f"}};"
+                # Transfer file directly (no base64, no length limit)
+                f"Copy-Item -Path '{local}' "
+                f"-Destination \"$env:USERPROFILE\\ExhibitionCMS\\screenshot_server.py\" "
+                f"-ToSession $s;"
+                # Install packages and start server
+                f"Invoke-Command -Session $s -ScriptBlock {{"
+                f"$p=\"$env:USERPROFILE\\ExhibitionCMS\\screenshot_server.py\";"
+                f"python -m pip install mss pillow --quiet 2>$null;"
+                f"$st=\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\";"
+                f"\"@echo off`nstart `\"`\" /B pythonw `\"$p`\"\" | Set-Content \"$st\\ExhibitionCMS-ScreenServer.bat\";"
+                f"taskkill /F /IM pythonw.exe 2>$null;"
+                f"Start-Process pythonw -ArgumentList $p -WindowStyle Hidden;"
+                f"'서버 시작 완료'"
+                f"}};"
+                f"Remove-PSSession $s"
             )
 
-            cmd = [
-                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                f"{cred_block}Invoke-Command {session_args} -ScriptBlock {{{remote_script}}}"
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+                capture_output=True, text=True, timeout=90
+            )
             if result.returncode == 0:
                 return True, result.stdout.strip() or "서버 시작 완료"
-            return False, result.stderr.strip() or "알 수 없는 오류"
+            err = result.stderr.strip()
+            # Provide friendly guidance for common errors
+            if "Copy-Item" in err or "파일" in err:
+                return False, f"파일 전송 실패 — '설치파일 생성'으로 .bat을 사용하세요.\n{err[:120]}"
+            return False, err[:200] or "알 수 없는 오류"
         except Exception as e:
             return False, str(e)
 
