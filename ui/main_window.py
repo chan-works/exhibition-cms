@@ -150,18 +150,25 @@ class MainWindow(QMainWindow):
             self.nav_buttons[key] = btn
             layout.addWidget(btn)
 
-        # Notification badge label (overlaid on button via status)
-        self.badge_label = QLabel("")
+        # Notification badge button
+        self.badge_label = QPushButton("")
         self.badge_label.setStyleSheet("""
-            color: white;
-            background-color: #e94560;
-            border-radius: 8px;
-            font-size: 11px;
-            font-weight: bold;
-            padding: 0 5px;
+            QPushButton {
+                color: white;
+                background-color: #e94560;
+                border: none;
+                border-radius: 8px;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+            }
+            QPushButton:hover {
+                background-color: #ff5577;
+            }
         """)
-        self.badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.badge_label.setFixedHeight(18)
+        self.badge_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.badge_label.setFixedHeight(28)
+        self.badge_label.clicked.connect(lambda: self._nav_to("notif"))
         self.badge_label.hide()
 
         layout.addStretch()
