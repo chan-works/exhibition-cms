@@ -37,34 +37,26 @@ SCREENSHOT_SERVER_PATH = _find_screenshot_server()
 
 
 class ServerLaunchWorker(QObject):
-    """SSH into each computer device and start screenshot_server.py."""
-    log = Signal(str)        # progress messages
+    """
+    Start screenshot_server.py on remote PCs.
+    Tries WinRM (port 5985, no SSH needed) first, then falls back to SSH (port 22).
+    """
+    log = Signal(str)
     finished = Signal()
 
     def __init__(self, devices):
         super().__init__()
-        # Only computer devices with SSH credentials
         self._devices = [
             d for d in devices
             if d.get("device_type") == "computer"
-            and d.get("config", {}).get("ssh_user")
             and d.get("config", {}).get("host")
         ]
 
     def run(self):
-        try:
-            import paramiko
-        except ImportError:
-            self.log.emit("❌ paramiko 미설치 — pip install paramiko 실행 후 재시도하세요.")
-            self.finished.emit()
-            return
-
         if not SCREENSHOT_SERVER_PATH.exists():
             self.log.emit(f"❌ screenshot_server.py 파일을 찾을 수 없습니다:\n   {SCREENSHOT_SERVER_PATH}")
             self.finished.emit()
             return
-
-        server_code = SCREENSHOT_SERVER_PATH.read_text(encoding="utf-8")
 
         for dev in self._devices:
             cfg = dev.get("config", {})
@@ -72,65 +64,120 @@ class ServerLaunchWorker(QObject):
             user = cfg.get("ssh_user", "")
             password = cfg.get("ssh_password", "")
             name = dev.get("name", host)
-            self.log.emit(f"\n▶ [{name}] {host} 연결 중...")
+            self.log.emit(f"\n▶ [{name}]  {host}")
 
-            try:
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(host, username=user, password=password, timeout=10)
+            # 1st: Try WinRM (port 5985) — works without SSH
+            if platform.system() == "Windows":
+                ok, msg = self._try_winrm(host, user, password)
+                if ok:
+                    self.log.emit(f"   ✓ WinRM 연결 성공\n   ✓ {msg}")
+                    continue
+                self.log.emit(f"   ✗ WinRM 실패: {msg}")
 
-                # Upload screenshot_server.py via SFTP
-                sftp = ssh.open_sftp()
-                remote_path = "/tmp/screenshot_server.py"
-                try:
-                    # Try Windows home dir first
-                    _, out, _ = ssh.exec_command("echo %USERPROFILE%", timeout=3)
-                    win_home = out.read().decode(errors="ignore").strip()
-                    if win_home and "%" not in win_home:
-                        remote_path = win_home.replace("\\", "/") + "/screenshot_server.py"
-                except Exception:
-                    pass
+            # 2nd: Try SSH (port 22)
+            if user:
+                ok, msg = self._try_ssh(host, user, password)
+                if ok:
+                    self.log.emit(f"   ✓ SSH 연결 성공\n   ✓ {msg}")
+                    continue
+                self.log.emit(f"   ✗ SSH 실패: {msg}")
+            else:
+                self.log.emit("   ✗ SSH 사용자 미설정 — 디바이스 편집에서 SSH 사용자/비밀번호 입력 필요")
 
-                with sftp.open(remote_path, "w") as f:
-                    f.write(server_code)
-                sftp.close()
-                self.log.emit(f"   ✓ screenshot_server.py 업로드 완료 → {remote_path}")
-
-                # Install dependencies (non-blocking)
-                ssh.exec_command(
-                    "pip install mss pillow --quiet 2>&1 || python -m pip install mss pillow --quiet 2>&1",
-                    timeout=5
-                )
-
-                # Kill any existing server process on port 19999
-                ssh.exec_command(
-                    f"pkill -f screenshot_server.py 2>/dev/null; "
-                    f"taskkill /F /FI \"IMAGENAME eq python.exe\" /FI \"WINDOWTITLE eq screenshot_server\" 2>nul; "
-                    f"sleep 1",
-                    timeout=5
-                )
-
-                # Start server in background
-                bg_cmd = (
-                    f"nohup python {remote_path} > /tmp/screenshot_server.log 2>&1 & "
-                    f"|| start /B pythonw {remote_path}"
-                )
-                ssh.exec_command(bg_cmd, timeout=3)
-                ssh.close()
-                self.log.emit(f"   ✓ 서버 시작 명령 전송 완료")
-
-            except Exception as e:
-                err = str(e)
-                self.log.emit(f"   ❌ 실패: {err}")
-                if "22" in err or "connect" in err.lower() or "refused" in err.lower():
-                    self.log.emit(
-                        f"   ℹ  포트 22(SSH)가 막혀 있습니다.\n"
-                        f"      → '설치파일 생성' 버튼으로 .bat 파일을 만들어\n"
-                        f"        대상 PC에서 한 번 실행하면 자동으로 설정됩니다."
-                    )
+            self.log.emit(
+                "   ℹ  자동 시작 불가 → '설치파일 생성' 버튼으로 .bat 파일을 만들어\n"
+                "      대상 PC에서 한 번 실행하면 이후 자동으로 작동합니다."
+            )
 
         self.log.emit("\n완료.")
         self.finished.emit()
+
+    def _try_winrm(self, host: str, user: str, password: str):
+        """Use PowerShell remoting (WinRM port 5985) to deploy and start the server."""
+        try:
+            b64 = base64.b64encode(SCREENSHOT_SERVER_PATH.read_bytes()).decode("ascii")
+
+            # Build credential block if credentials provided
+            if user and password:
+                cred_block = (
+                    f"$pw=ConvertTo-SecureString '{password}' -AsPlainText -Force;"
+                    f"$cred=New-Object PSCredential('{user}',$pw);"
+                )
+                session_args = f"-ComputerName {host} -Credential $cred"
+            else:
+                cred_block = ""
+                session_args = f"-ComputerName {host}"
+
+            # Add to TrustedHosts first
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                 f"Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value '{host}' -Force -Concatenate"],
+                capture_output=True, timeout=10
+            )
+
+            # Remote script: decode b64 → write file → install packages → start server
+            remote_script = (
+                f"$b='{b64}';"
+                "$p=\"$env:USERPROFILE\\ExhibitionCMS\\screenshot_server.py\";"
+                "[IO.Directory]::CreateDirectory(\"$env:USERPROFILE\\ExhibitionCMS\")|Out-Null;"
+                "[IO.File]::WriteAllBytes($p,[Convert]::FromBase64String($b));"
+                "python -m pip install mss pillow --quiet 2>$null;"
+                "$s=\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\";"
+                "\"@echo off`nstart `\"`\" /B pythonw `\"$p`\"\"|Set-Content \"$s\\ExhibitionCMS-ScreenServer.bat\";"
+                "taskkill /F /IM pythonw.exe 2>$null;"
+                "Start-Process pythonw -ArgumentList $p -WindowStyle Hidden;"
+                "\"서버 시작 완료: $p\""
+            )
+
+            cmd = [
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                f"{cred_block}Invoke-Command {session_args} -ScriptBlock {{{remote_script}}}"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                return True, result.stdout.strip() or "서버 시작 완료"
+            return False, result.stderr.strip() or "알 수 없는 오류"
+        except Exception as e:
+            return False, str(e)
+
+    def _try_ssh(self, host: str, user: str, password: str):
+        """Use SSH (port 22) to deploy and start the server."""
+        try:
+            import paramiko
+        except ImportError:
+            return False, "paramiko 미설치 (pip install paramiko)"
+
+        try:
+            server_code = SCREENSHOT_SERVER_PATH.read_text(encoding="utf-8")
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(host, username=user, password=password, timeout=10)
+
+            sftp = ssh.open_sftp()
+            remote_path = "/tmp/screenshot_server.py"
+            try:
+                _, out, _ = ssh.exec_command("echo %USERPROFILE%", timeout=3)
+                win_home = out.read().decode(errors="ignore").strip()
+                if win_home and "%" not in win_home:
+                    remote_path = win_home.replace("\\", "/") + "/ExhibitionCMS/screenshot_server.py"
+                    ssh.exec_command(f"mkdir -p \"{win_home}/ExhibitionCMS\"", timeout=3)
+            except Exception:
+                pass
+
+            with sftp.open(remote_path, "w") as f:
+                f.write(server_code)
+            sftp.close()
+
+            ssh.exec_command("python -m pip install mss pillow --quiet", timeout=10)
+            ssh.exec_command(
+                f"nohup python {remote_path} > /tmp/screenshot_server.log 2>&1 & "
+                f"|| (taskkill /F /IM pythonw.exe >nul 2>&1 & start /B pythonw {remote_path})",
+                timeout=5
+            )
+            ssh.close()
+            return True, "서버 시작 완료"
+        except Exception as e:
+            return False, str(e)
 
 
 def generate_setup_bat(device: dict) -> str:
