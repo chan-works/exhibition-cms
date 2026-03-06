@@ -39,7 +39,7 @@ QPushButton#success:hover {
     background-color: #1f8048;
 }
 
-QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QTimeEdit, QComboBox {
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background-color: #16213e;
     color: #e0e0e0;
     border: 1px solid #0f3460;
@@ -47,8 +47,58 @@ QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QTimeEdit, QComb
     padding: 6px 10px;
     selection-background-color: #e94560;
 }
-QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QTimeEdit:focus {
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
     border: 1px solid #e94560;
+}
+
+QTimeEdit, QSpinBox, QDoubleSpinBox {
+    background-color: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 4px 4px 4px 8px;
+    selection-background-color: #e94560;
+}
+QTimeEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1px solid #e94560;
+}
+QTimeEdit::up-button, QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    height: 14px;
+    background-color: #0f3460;
+    border-left: 1px solid #1a3a60;
+    border-bottom: 1px solid #1a3a60;
+    border-top-right-radius: 4px;
+}
+QTimeEdit::up-button:hover, QSpinBox::up-button:hover {
+    background-color: #1a4a80;
+}
+QTimeEdit::down-button, QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 22px;
+    height: 14px;
+    background-color: #0f3460;
+    border-left: 1px solid #1a3a60;
+    border-top: 1px solid #1a3a60;
+    border-bottom-right-radius: 4px;
+}
+QTimeEdit::down-button:hover, QSpinBox::down-button:hover {
+    background-color: #1a4a80;
+}
+QTimeEdit::up-arrow, QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #c0d0e0;
+}
+QTimeEdit::down-arrow, QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    width: 0; height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #c0d0e0;
 }
 QComboBox::drop-down {
     border: none;

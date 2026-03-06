@@ -577,6 +577,23 @@ class DeviceManager(QWidget):
             off_btn.clicked.connect(lambda checked, d=dev: self._manual_trigger(d, "off"))
             btn_layout.addWidget(off_btn)
 
+            if dev.get("device_type") == "computer":
+                screen_btn = QPushButton("🖥 화면")
+                screen_btn.setFixedHeight(26)
+                screen_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1a4a80;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        padding: 0 6px;
+                        font-size: 12px;
+                    }
+                    QPushButton:hover { background-color: #2a5a90; }
+                """)
+                screen_btn.clicked.connect(lambda checked, d=dev: self._open_screen_viewer(d))
+                btn_layout.addWidget(screen_btn)
+
             if self.current_user["role"] in ("admin", "operator"):
                 edit_btn = QPushButton("편집")
                 edit_btn.setFixedHeight(26)
@@ -592,6 +609,11 @@ class DeviceManager(QWidget):
 
             self.table.setCellWidget(i, 5, btn_widget)
             self.table.setRowHeight(i, 40)
+
+    def _open_screen_viewer(self, device):
+        from ui.screen_viewer import ScreenViewerDialog
+        dlg = ScreenViewerDialog(device, self)
+        dlg.show()
 
     def _manual_trigger(self, device, action):
         if not self.scheduler:
