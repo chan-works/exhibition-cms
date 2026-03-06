@@ -121,22 +121,28 @@ class ServerLaunchWorker(QObject):
                 cred_ps = ""
                 session_new = f"New-PSSession -ComputerName {host}"
 
+            # Use fixed path — $env:USERPROFILE in double-quoted strings expands on the
+            # LOCAL machine, not the remote, causing Copy-Item -ToSession to send the
+            # file to the wrong path. C:\ProgramData is always writable by admins.
+            remote_dir = "C:\\\\ProgramData\\\\ExhibitionCMS"
+            remote_py  = f"{remote_dir}\\\\screenshot_server.py"
+
             ps_cmd = (
                 f"{cred_ps}"
                 f"$s={session_new};"
-                # Create remote directory
+                # Create remote directory (literal path, no variable expansion)
                 f"Invoke-Command -Session $s -ScriptBlock {{"
-                f"New-Item -ItemType Directory -Path \"$env:USERPROFILE\\ExhibitionCMS\" -Force|Out-Null"
+                f"New-Item -ItemType Directory -Path '{remote_dir}' -Force|Out-Null"
                 f"}};"
-                # Transfer file directly (no base64, no length limit)
+                # Transfer file (destination is literal — safe for Copy-Item -ToSession)
                 f"Copy-Item -Path '{local}' "
-                f"-Destination \"$env:USERPROFILE\\ExhibitionCMS\\screenshot_server.py\" "
+                f"-Destination '{remote_py}' "
                 f"-ToSession $s;"
                 # Install packages and start server
                 f"Invoke-Command -Session $s -ScriptBlock {{"
-                f"$p=\"$env:USERPROFILE\\ExhibitionCMS\\screenshot_server.py\";"
+                f"$p='{remote_py}';"
                 f"python -m pip install mss pillow --quiet 2>$null;"
-                f"$st=\"$env:APPDATA\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\";"
+                f"$st=[Environment]::GetFolderPath('Startup');"
                 f"\"@echo off`nstart `\"`\" /B pythonw `\"$p`\"\" | Set-Content \"$st\\ExhibitionCMS-ScreenServer.bat\";"
                 f"taskkill /F /IM pythonw.exe 2>$null;"
                 f"Start-Process pythonw -ArgumentList $p -WindowStyle Hidden;"
@@ -160,38 +166,52 @@ class ServerLaunchWorker(QObject):
             return False, str(e)
 
     def _try_ssh(self, host: str, user: str, password: str):
-        """Use SSH (port 22) to deploy and start the server."""
+        """Use SSH (port 22) to deploy and start the server (Windows target)."""
         try:
             import paramiko
         except ImportError:
             return False, "paramiko 미설치 (pip install paramiko)"
 
         try:
-            server_code = SCREENSHOT_SERVER_PATH.read_text(encoding="utf-8")
+            import io
+            server_bytes = SCREENSHOT_SERVER_PATH.read_bytes()
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(host, username=user, password=password, timeout=10)
 
+            # Use fixed path — avoids variable-expansion issues on both sides
+            remote_dir = "C:/ProgramData/ExhibitionCMS"
+            remote_py  = f"{remote_dir}/screenshot_server.py"
+
+            # Create directory via PowerShell (works on Windows SSH)
+            ssh.exec_command(
+                f"powershell -NoProfile -ExecutionPolicy Bypass -Command "
+                f"\"New-Item -ItemType Directory -Force -Path '{remote_dir}' | Out-Null\"",
+                timeout=5
+            )
+
+            # Upload file via SFTP
             sftp = ssh.open_sftp()
-            remote_path = "/tmp/screenshot_server.py"
             try:
-                _, out, _ = ssh.exec_command("echo %USERPROFILE%", timeout=3)
-                win_home = out.read().decode(errors="ignore").strip()
-                if win_home and "%" not in win_home:
-                    remote_path = win_home.replace("\\", "/") + "/ExhibitionCMS/screenshot_server.py"
-                    ssh.exec_command(f"mkdir -p \"{win_home}/ExhibitionCMS\"", timeout=3)
+                sftp.mkdir(remote_dir)
             except Exception:
                 pass
-
-            with sftp.open(remote_path, "w") as f:
-                f.write(server_code)
+            sftp.putfo(io.BytesIO(server_bytes), remote_py)
             sftp.close()
 
-            ssh.exec_command("python -m pip install mss pillow --quiet", timeout=10)
+            # Install packages, register auto-start, and launch server
+            ps_win = (
+                f"python -m pip install mss pillow --quiet 2>$null; "
+                f"$p='{remote_dir}/screenshot_server.py'; "
+                f"$st=[Environment]::GetFolderPath('Startup'); "
+                f"\\\"@echo off`nstart `\"\\\"` /B pythonw `\"$p`\"\\\"\\\" | "
+                f"Set-Content \\\"$st\\\\ExhibitionCMS-ScreenServer.bat\\\"; "
+                f"taskkill /F /IM pythonw.exe 2>$null; "
+                f"Start-Process pythonw -ArgumentList '$p' -WindowStyle Hidden"
+            )
             ssh.exec_command(
-                f"nohup python {remote_path} > /tmp/screenshot_server.log 2>&1 & "
-                f"|| (taskkill /F /IM pythonw.exe >nul 2>&1 & start /B pythonw {remote_path})",
-                timeout=5
+                f"powershell -NoProfile -ExecutionPolicy Bypass -Command \"{ps_win}\"",
+                timeout=15
             )
             ssh.close()
             return True, "서버 시작 완료"
@@ -442,14 +462,19 @@ class ScreenTile(QFrame):
 
     def set_error(self, msg: str):
         self.screen_lbl.setPixmap(QPixmap())
-        if "refused" in msg.lower() or "10061" in msg:
+        msg_lower = msg.lower()
+        if "refused" in msg_lower or "10061" in msg:
+            # Server not running — show start button
             self.screen_lbl.setText("서버 미실행\n(아래 '서버 시작' 버튼을 누르세요)")
-        elif "timed out" in msg.lower() or "timeout" in msg.lower():
+            self.start_btn.setVisible(True)
+        elif "timed out" in msg_lower or "timeout" in msg_lower:
+            # Network/IP issue — start button is not helpful
             self.screen_lbl.setText("응답 없음\n(네트워크 또는 IP 확인)")
+            self.start_btn.setVisible(False)
         else:
             self.screen_lbl.setText(f"연결 실패\n{msg[:50]}")
+            self.start_btn.setVisible(True)
         self._set_online(False)
-        self.start_btn.setVisible(True)
         self.time_lbl.setText(datetime.now().strftime("%H:%M:%S"))
 
     def set_starting(self):
@@ -856,11 +881,13 @@ class MonitorPanel(QWidget):
         worker.need_installer.connect(on_need_installer)
 
         def on_finished():
-            thread.quit()
             self.auto_start_btn.setEnabled(True)
             self.auto_start_btn.setText("SSH 자동 시작")
 
         worker.finished.connect(on_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        self._auto_launcher = (thread, worker)  # prevent GC while running
         thread.start()
         dlg.exec()
 
