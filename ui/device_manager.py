@@ -663,14 +663,21 @@ class DeviceDialog(QDialog):
         if ok:
             QMessageBox.information(self, "SSH 활성화 완료", msg)
         else:
-            QMessageBox.critical(
-                self, "SSH 활성화 실패",
-                f"{msg}\n\n"
-                "WinRM이 비활성화된 경우 대상 PC에서 직접 실행:\n"
-                "  1. 관리자 CMD 열기\n"
-                "  2. winrm quickconfig 실행\n"
-                "  3. 이후 다시 시도"
-            )
+            # Provide specific guidance based on error type
+            extra = ""
+            if "TrustedHosts" in msg or "ServerNotTrusted" in msg:
+                extra = (
+                    "\n\n[해결 방법] CMS PC에서 관리자 PowerShell 실행:\n"
+                    f"  Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value '{host}' -Force\n\n"
+                    "또는 대상 PC에서 관리자 CMD 실행:\n"
+                    "  winrm quickconfig\n"
+                    "  netsh advfirewall firewall add rule name=WinRM protocol=TCP dir=in localport=5985 action=allow"
+                )
+            elif "액세스가 거부" in msg or "Access" in msg or "denied" in msg.lower():
+                extra = "\n\n[해결 방법] 디바이스 설정에서 SSH 사용자/비밀번호(Windows 관리자 계정)를 입력하세요."
+            elif "연결할 수 없" in msg or "connect" in msg.lower():
+                extra = "\n\n[해결 방법] 대상 PC에서 관리자 CMD 실행:\n  winrm quickconfig"
+            QMessageBox.critical(self, "SSH 활성화 실패", msg + extra)
 
     def _wol_enable_remote(self):
         if not self.config_widget:

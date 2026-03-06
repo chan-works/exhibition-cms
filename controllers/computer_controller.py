@@ -249,21 +249,33 @@ $results -join "`n"
         if platform.system() != "Windows":
             return False, "WMI 방식은 Windows CMS에서만 사용 가능합니다.\nSSH 방식을 사용하세요."
         try:
-            import tempfile, os
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1",
-                                             delete=False, encoding="utf-8") as f:
-                f.write(script)
-                tmp = f.name
+            # Add target IP to TrustedHosts so WinRM works without domain
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                 f"Set-Item WSMan:\\localhost\\Client\\TrustedHosts -Value '{self.host}' "
+                 f"-Force -Concatenate"],
+                capture_output=True, timeout=10
+            )
+
+            credential_block = ""
+            if self.ssh_user and self.ssh_password:
+                credential_block = (
+                    f"$pw = ConvertTo-SecureString '{self.ssh_password}' -AsPlainText -Force; "
+                    f"$cred = New-Object System.Management.Automation.PSCredential('{self.ssh_user}', $pw); "
+                )
+                invoke_args = f"-ComputerName {self.host} -Credential $cred"
+            else:
+                invoke_args = f"-ComputerName {self.host}"
+
             cmd = [
                 "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
                 "-Command",
-                f"Invoke-Command -ComputerName {self.host} "
-                f"-ScriptBlock {{ {script.strip()} }}"
+                f"{credential_block}"
+                f"Invoke-Command {invoke_args} -ScriptBlock {{ {script.strip()} }}"
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            os.unlink(tmp)
             if result.returncode == 0:
-                return True, f"WOL 설정 완료:\n{result.stdout.strip()}"
+                return True, result.stdout.strip() or "완료"
             return False, result.stderr.strip() or "실행 실패"
         except Exception as e:
             return False, str(e)

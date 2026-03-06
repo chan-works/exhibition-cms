@@ -120,7 +120,14 @@ class ServerLaunchWorker(QObject):
                 self.log.emit(f"   ✓ 서버 시작 명령 전송 완료")
 
             except Exception as e:
-                self.log.emit(f"   ❌ 실패: {e}")
+                err = str(e)
+                self.log.emit(f"   ❌ 실패: {err}")
+                if "22" in err or "connect" in err.lower() or "refused" in err.lower():
+                    self.log.emit(
+                        f"   ℹ  포트 22(SSH)가 막혀 있습니다.\n"
+                        f"      → '설치파일 생성' 버튼으로 .bat 파일을 만들어\n"
+                        f"        대상 PC에서 한 번 실행하면 자동으로 설정됩니다."
+                    )
 
         self.log.emit("\n완료.")
         self.finished.emit()
