@@ -478,6 +478,7 @@ class MonitorPanel(QWidget):
         self.current_user = current_user
         self._tiles = {}          # device_id → ScreenTile
         self._fetchers = {}       # device_id → (QThread, ScreenFetcher)
+        self._launchers = {}      # device_id → (QThread, ServerLaunchWorker)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_all)
         self._build_ui()
@@ -756,7 +757,6 @@ class MonitorPanel(QWidget):
             _failed.append(dev)
 
         def on_finished():
-            thread.quit()
             if tile:
                 tile.start_btn.setEnabled(True)
                 tile.start_btn.setText("서버 시작")
@@ -774,6 +774,9 @@ class MonitorPanel(QWidget):
         worker.log.connect(on_log)
         worker.need_installer.connect(on_need_installer)
         worker.finished.connect(on_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        self._launchers[dev_id] = (thread, worker)  # prevent GC while running
         thread.start()
 
     def _fetch_one(self, dev_id: str):
