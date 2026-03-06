@@ -55,13 +55,28 @@ jobs:
           choco install innosetup -y
           refreshenv
 
+      - name: 버전 설정
+        id: version
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart('v')
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "ver=$ver" >> $env:GITHUB_OUTPUT
+
       - name: 설치 파일 빌드 (Setup.exe)
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          $ver = "${{ steps.version.outputs.ver }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss /DMyAppVersion=$ver
           Write-Host "✅ 설치 파일 생성 완료"
 
-      - name: 설치 파일 확인
-        run: Get-ChildItem Output/
+      - name: 파일명에 버전 추가
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          # Rename standalone EXE
+          mv dist/ExhibitionCMS.exe dist/ExhibitionCMS-$tag.exe
+          Write-Host "✅ dist/ExhibitionCMS-$tag.exe"
+          # Confirm Setup EXE name
+          Get-ChildItem Output/
 
       - name: 아티팩트 업로드 (설치 파일)
         uses: actions/upload-artifact@v4
@@ -74,7 +89,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ExhibitionCMS-exe-only
-          path: dist/ExhibitionCMS.exe
+          path: dist/ExhibitionCMS-${{ steps.version.outputs.tag }}.exe
           retention-days: 30
 
       - name: GitHub Release 생성 (태그 푸시 시)
@@ -103,7 +118,7 @@ jobs:
             - 다중 전시 구역 관리
           files: |
             Output/ExhibitionCMS-Setup-*.exe
-            dist/ExhibitionCMS.exe
+            dist/ExhibitionCMS-${{ steps.version.outputs.tag }}.exe
           draft: false
           prerelease: false
         env:
