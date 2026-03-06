@@ -38,14 +38,32 @@ class ExhibitionScheduler:
 
     def _reload_jobs(self):
         self._scheduler.remove_all_jobs()
-        today = date.today().isoformat()
-        schedules = self.db.get_schedules_for_date(today)
+        today = date.today()
+        today_str = today.isoformat()
+        day_of_week = today.weekday()  # 0=Mon, 6=Sun
 
-        for sched in schedules:
-            if not sched["is_enabled"] or sched["is_holiday"]:
-                continue
-            zone_id = sched["zone_id"]
-            zone_name = sched.get("zone_name", f"Zone {zone_id}")
+        zones = self.db.get_all_zones()
+        scheduled_count = 0
+
+        for zone in zones:
+            zone_id = zone["id"]
+            zone_name = zone["name"]
+
+            # Specific date schedule takes priority over recurring
+            specific = self.db.get_schedule(zone_id, today_str)
+            if specific:
+                if not specific["is_enabled"] or specific["is_holiday"]:
+                    continue
+                sched = specific
+                sched_type = "specific"
+            else:
+                # Fall back to recurring schedule
+                recurring = self.db.get_recurring_schedules(zone_id)
+                day_sched = next((r for r in recurring if r["day_of_week"] == day_of_week), None)
+                if not day_sched or not day_sched.get("is_enabled"):
+                    continue
+                sched = day_sched
+                sched_type = "recurring"
 
             if sched.get("time_on"):
                 h, m = map(int, sched["time_on"].split(":"))
@@ -53,7 +71,7 @@ class ExhibitionScheduler:
                     self._run_zone,
                     CronTrigger(hour=h, minute=m),
                     args=[zone_id, zone_name, "on"],
-                    id=f"on_{zone_id}_{today}",
+                    id=f"on_{zone_id}_{today_str}",
                     replace_existing=True
                 )
 
@@ -63,11 +81,20 @@ class ExhibitionScheduler:
                     self._run_zone,
                     CronTrigger(hour=h, minute=m),
                     args=[zone_id, zone_name, "off"],
-                    id=f"off_{zone_id}_{today}",
+                    id=f"off_{zone_id}_{today_str}",
                     replace_existing=True
                 )
+            scheduled_count += 1
 
-        logger.info("스케줄 새로고침 완료: %d개 구역 로드", len(schedules))
+        # Daily midnight reload for next day's schedule
+        self._scheduler.add_job(
+            self._reload_jobs,
+            CronTrigger(hour=0, minute=0),
+            id="daily_reload",
+            replace_existing=True
+        )
+
+        logger.info("스케줄 새로고침 완료: %d개 구역 로드", scheduled_count)
 
     def _run_zone(self, zone_id: int, zone_name: str, action: str):
         devices = self.db.get_devices_by_zone(zone_id)

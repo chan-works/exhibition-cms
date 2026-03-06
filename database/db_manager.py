@@ -82,6 +82,19 @@ class DatabaseManager:
                     key TEXT PRIMARY KEY,
                     value TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS recurring_schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    zone_id INTEGER NOT NULL,
+                    day_of_week INTEGER NOT NULL,
+                    time_on TEXT,
+                    time_off TEXT,
+                    is_enabled INTEGER DEFAULT 1,
+                    notes TEXT,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    FOREIGN KEY (zone_id) REFERENCES zones(id) ON DELETE CASCADE,
+                    UNIQUE (zone_id, day_of_week)
+                );
             """)
             cursor = conn.execute("SELECT COUNT(*) FROM users")
             if cursor.fetchone()[0] == 0:
@@ -312,6 +325,67 @@ class DatabaseManager:
             )
 
     # ── Settings ──────────────────────────────────────────────────────────────
+
+    # ── Recurring Schedules ───────────────────────────────────────────────────
+
+    def get_recurring_schedules(self, zone_id):
+        """Returns list of 7 entries (0=Mon … 6=Sun), None if not set."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM recurring_schedules WHERE zone_id=? ORDER BY day_of_week",
+                (zone_id,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_all_recurring_schedules(self):
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT r.*, z.name as zone_name, z.color as zone_color
+                FROM recurring_schedules r
+                JOIN zones z ON r.zone_id = z.id
+                ORDER BY z.name, r.day_of_week
+            """).fetchall()
+            return [dict(r) for r in rows]
+
+    def save_recurring_schedule(self, zone_id, day_of_week, time_on, time_off, is_enabled, notes=""):
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO recurring_schedules
+                    (zone_id, day_of_week, time_on, time_off, is_enabled, notes)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(zone_id, day_of_week) DO UPDATE SET
+                    time_on=excluded.time_on,
+                    time_off=excluded.time_off,
+                    is_enabled=excluded.is_enabled,
+                    notes=excluded.notes
+            """, (zone_id, day_of_week, time_on, time_off, is_enabled, notes))
+
+    def delete_recurring_schedule(self, zone_id, day_of_week):
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM recurring_schedules WHERE zone_id=? AND day_of_week=?",
+                (zone_id, day_of_week)
+            )
+
+    def get_effective_schedule_for_today(self, zone_id):
+        """Returns today's specific schedule if exists, else recurring schedule."""
+        from datetime import date
+        today = date.today()
+        date_str = today.isoformat()
+        day_of_week = today.weekday()  # 0=Mon, 6=Sun
+
+        specific = self.get_schedule(zone_id, date_str)
+        if specific:
+            return specific, "specific"
+
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM recurring_schedules WHERE zone_id=? AND day_of_week=? AND is_enabled=1",
+                (zone_id, day_of_week)
+            ).fetchone()
+            if row:
+                return dict(row), "recurring"
+        return None, None
 
     def get_setting(self, key, default=None):
         with self._get_conn() as conn:

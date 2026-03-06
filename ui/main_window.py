@@ -14,15 +14,17 @@ from ui.device_manager import DeviceManager
 from ui.zone_manager import ZoneManager
 from ui.user_manager import UserManager
 from ui.notification_panel import NotificationPanel
+from ui.recurring_schedule import RecurringSchedulePanel
 from controllers.scheduler import ExhibitionScheduler
 
 
 NAV_ITEMS = [
-    ("calendar", "📅  캘린더"),
-    ("devices",  "🖥  디바이스"),
-    ("zones",    "🏛  구역 관리"),
-    ("users",    "👤  사용자"),
-    ("notif",    "🔔  알림"),
+    ("calendar",   "📅  캘린더"),
+    ("recurring",  "🔁  정기 스케줄"),
+    ("devices",    "🖥  디바이스"),
+    ("zones",      "🏛  구역 관리"),
+    ("users",      "👤  사용자"),
+    ("notif",      "🔔  알림"),
 ]
 
 
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
 
         # Create pages
         self.calendar_page = CalendarView(self.db, self.current_user, self.scheduler)
+        self.recurring_page = RecurringSchedulePanel(self.db, self.current_user, self.scheduler)
         self.device_page = DeviceManager(self.db, self.current_user, self.scheduler)
         self.zone_page = ZoneManager(self.db, self.current_user)
         self.notif_page = NotificationPanel(self.db)
@@ -83,15 +86,17 @@ class MainWindow(QMainWindow):
         else:
             self.user_page = self._access_denied_page()
 
-        self.stack.addWidget(self.calendar_page)   # index 0
-        self.stack.addWidget(self.device_page)     # index 1
-        self.stack.addWidget(self.zone_page)        # index 2
-        self.stack.addWidget(self.user_page)        # index 3
-        self.stack.addWidget(self.notif_page)       # index 4
+        self.stack.addWidget(self.calendar_page)    # index 0
+        self.stack.addWidget(self.recurring_page)   # index 1
+        self.stack.addWidget(self.device_page)      # index 2
+        self.stack.addWidget(self.zone_page)         # index 3
+        self.stack.addWidget(self.user_page)         # index 4
+        self.stack.addWidget(self.notif_page)        # index 5
 
         # Cross-wire signals
         self.zone_page.zones_changed.connect(self._on_zones_changed)
         self.device_page.devices_changed.connect(self._on_devices_changed)
+        self.recurring_page.changed.connect(self.calendar_page.refresh)
 
         # Status bar
         self.status = QStatusBar()
@@ -196,17 +201,20 @@ class MainWindow(QMainWindow):
             btn.setChecked(k == key)
 
         page_map = {
-            "calendar": 0,
-            "devices":  1,
-            "zones":    2,
-            "users":    3,
-            "notif":    4,
+            "calendar":  0,
+            "recurring": 1,
+            "devices":   2,
+            "zones":     3,
+            "users":     4,
+            "notif":     5,
         }
         self.stack.setCurrentIndex(page_map.get(key, 0))
 
         if key == "notif":
             self.notif_page.refresh()
             self._update_badge_label(self.db.get_unread_count())
+        if key == "recurring":
+            self.recurring_page.refresh()
 
     # ── Signals ───────────────────────────────────────────────────────────────
 
