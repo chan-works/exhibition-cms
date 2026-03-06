@@ -1,0 +1,33 @@
+name: Build & Release Windows EXE
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: pyinstaller build.spec --clean
+
+      - name: Upload EXE to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ExhibitionCMS.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
