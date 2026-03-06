@@ -1,5 +1,8 @@
 import urllib.request
 import os
+import base64
+import subprocess
+import platform
 from datetime import datetime
 from pathlib import Path
 
@@ -121,6 +124,90 @@ class ServerLaunchWorker(QObject):
 
         self.log.emit("\n완료.")
         self.finished.emit()
+
+
+def generate_setup_bat(device: dict) -> str:
+    """
+    Generate a fully self-contained Windows .bat installer for screenshot_server.py.
+    The .bat file: writes the server script, installs Python if missing,
+    installs mss/pillow, opens firewall port 19999, and registers auto-start.
+    """
+    if not SCREENSHOT_SERVER_PATH.exists():
+        raise FileNotFoundError(f"screenshot_server.py 를 찾을 수 없습니다: {SCREENSHOT_SERVER_PATH}")
+
+    b64 = base64.b64encode(SCREENSHOT_SERVER_PATH.read_bytes()).decode("ascii")
+    # Split into 76-char lines safe for batch `echo`
+    b64_lines = "\n".join(f"echo {b64[i:i+76]}>>\"%%TMPB64%%\"" for i in range(0, len(b64), 76))
+
+    name = device.get("name", "PC")
+    host = device.get("config", {}).get("host", "")
+
+    return (
+        "@echo off\n"
+        "chcp 65001 >nul\n"
+        f"title Exhibition CMS - 화면서버 설치 [{name}]\n"
+        "echo.\n"
+        "echo  ==============================================\n"
+        f"echo    Exhibition CMS 화면 모니터링 서버 설치\n"
+        f"echo    대상 PC : {name}  ({host})\n"
+        "echo  ==============================================\n"
+        "echo.\n"
+        "\n"
+        "set INSTALL_DIR=%USERPROFILE%\\ExhibitionCMS\n"
+        "set TMPB64=%TEMP%\\cms_b64.tmp\n"
+        "mkdir \"%INSTALL_DIR%\" 2>nul\n"
+        "\n"
+        "REM [1/4] screenshot_server.py 생성\n"
+        "echo  [1/4] 서버 파일 생성 중...\n"
+        "del \"%TMPB64%\" 2>nul\n"
+        + b64_lines + "\n"
+        "powershell -NoProfile -Command "
+        "\"$b=[Convert]::FromBase64String((gc '%TMPB64%') -join '');"
+        "[IO.File]::WriteAllBytes('%INSTALL_DIR%\\screenshot_server.py',$b)\"\n"
+        "del \"%TMPB64%\" 2>nul\n"
+        "\n"
+        "REM [2/4] Python 확인 및 자동 설치\n"
+        "echo  [2/4] Python 확인 중...\n"
+        "python --version >nul 2>&1\n"
+        "if errorlevel 1 (\n"
+        "    echo      Python 없음 - 자동 다운로드 중... ^(인터넷 필요^)\n"
+        "    powershell -NoProfile -Command \"Invoke-WebRequest "
+        "'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' "
+        "-OutFile '%TEMP%\\py_setup.exe'\"\n"
+        "    \"%TEMP%\\py_setup.exe\" /quiet InstallAllUsers=0 PrependPath=1 Include_test=0\n"
+        "    set \"PATH=%LOCALAPPDATA%\\Programs\\Python\\Python311;"
+        "%LOCALAPPDATA%\\Programs\\Python\\Python311\\Scripts;%PATH%\"\n"
+        "    echo      Python 설치 완료\n"
+        ")\n"
+        "\n"
+        "REM [3/4] 패키지 설치\n"
+        "echo  [3/4] 패키지 설치 중... ^(mss, pillow^)\n"
+        "python -m pip install mss pillow --quiet --disable-pip-version-check\n"
+        "\n"
+        "REM [4/4] 방화벽 + 자동시작 등록\n"
+        "echo  [4/4] 방화벽 및 자동시작 설정 중...\n"
+        "netsh advfirewall firewall delete rule name=\"ExhibitionCMS-Screen\" >nul 2>&1\n"
+        "netsh advfirewall firewall add rule name=\"ExhibitionCMS-Screen\" "
+        "protocol=TCP dir=in localport=19999 action=allow >nul 2>&1\n"
+        "\n"
+        "set \"STARTUP=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\"\n"
+        "(echo @echo off & echo start \"\" /B pythonw \"%INSTALL_DIR%\\screenshot_server.py\")"
+        " > \"%STARTUP%\\ExhibitionCMS-ScreenServer.bat\"\n"
+        "\n"
+        "REM 즉시 시작\n"
+        "taskkill /F /IM pythonw.exe >nul 2>&1\n"
+        "start \"\" /B pythonw \"%INSTALL_DIR%\\screenshot_server.py\"\n"
+        "\n"
+        "echo.\n"
+        "echo  ==============================================\n"
+        "echo    설치 완료!\n"
+        "echo    - CMS에서 이 PC 화면이 즉시 표시됩니다\n"
+        "echo    - Windows 시작 시 자동으로 실행됩니다\n"
+        "echo    - 포트: 19999\n"
+        "echo  ==============================================\n"
+        "echo.\n"
+        "pause\n"
+    )
 
 
 class ScreenFetcher(QObject):
@@ -274,8 +361,23 @@ class MonitorPanel(QWidget):
         header.addWidget(title)
         header.addStretch()
 
-        self.auto_start_btn = QPushButton("서버 자동 시작 (SSH)")
+        self.gen_installer_btn = QPushButton("설치파일 생성")
+        self.gen_installer_btn.setFixedHeight(30)
+        self.gen_installer_btn.setToolTip("각 PC에서 한 번만 실행하면 되는 .bat 설치파일을 생성합니다")
+        self.gen_installer_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2e7d32; color: white;
+                border: none; border-radius: 4px;
+                padding: 0 12px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #388e3c; }
+        """)
+        self.gen_installer_btn.clicked.connect(self._generate_installers)
+        header.addWidget(self.gen_installer_btn)
+
+        self.auto_start_btn = QPushButton("SSH 자동 시작")
         self.auto_start_btn.setFixedHeight(30)
+        self.auto_start_btn.setToolTip("SSH가 설정된 PC에만 작동합니다")
         self.auto_start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #1a4a80; color: white;
@@ -407,6 +509,59 @@ class MonitorPanel(QWidget):
                 lbl.setPixmap(pm.scaledToWidth(920, Qt.TransformationMode.SmoothTransformation))
                 lyt.addWidget(lbl)
                 dlg.exec()
+
+    def _generate_installers(self):
+        devices = self.db.get_all_devices()
+        computer_devices = [
+            d for d in devices
+            if d.get("device_type") == "computer"
+            and d.get("config", {}).get("host")
+        ]
+        if not computer_devices:
+            QMessageBox.warning(self, "PC 없음",
+                "등록된 컴퓨터 디바이스가 없습니다.\n디바이스 관리에서 PC를 추가하세요.")
+            return
+
+        # Save to Desktop\ExhibitionCMS-설치파일
+        desktop = Path.home() / "Desktop"
+        if not desktop.exists():
+            desktop = Path.home()
+        out_dir = desktop / "ExhibitionCMS-설치파일"
+        out_dir.mkdir(exist_ok=True)
+
+        saved = []
+        errors = []
+        for dev in computer_devices:
+            safe_name = dev["name"].replace(" ", "_").replace("/", "-")
+            bat_path = out_dir / f"설치_{safe_name}.bat"
+            try:
+                content = generate_setup_bat(dev)
+                bat_path.write_text(content, encoding="utf-8-sig")  # BOM for Windows
+                saved.append(dev["name"])
+            except Exception as e:
+                errors.append(f"{dev['name']}: {e}")
+
+        # Open the output folder
+        if platform.system() == "Windows":
+            subprocess.Popen(["explorer", str(out_dir)])
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", str(out_dir)])
+        else:
+            subprocess.Popen(["xdg-open", str(out_dir)])
+
+        msg = (
+            f"설치파일 {len(saved)}개 생성 완료!\n\n"
+            f"저장 위치:\n{out_dir}\n\n"
+            "사용 방법:\n"
+            "  1. 생성된 .bat 파일을 USB 또는 공유폴더로 대상 PC에 복사\n"
+            "  2. 대상 PC에서 .bat 파일을 마우스 오른쪽 클릭\n"
+            "     → '관리자 권한으로 실행'\n"
+            "  3. 설치가 완료되면 CMS에서 바로 화면이 보입니다\n"
+            "  4. 이후 PC를 켤 때마다 자동으로 실행됩니다"
+        )
+        if errors:
+            msg += f"\n\n오류:\n" + "\n".join(errors)
+        QMessageBox.information(self, "설치파일 생성 완료", msg)
 
     def _auto_start_servers(self):
         devices = self.db.get_all_devices()
