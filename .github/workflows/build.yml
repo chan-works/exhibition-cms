@@ -1,0 +1,107 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '버전 (예: 1.0.0)'
+        required: false
+        default: '1.0.0'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: PyInstaller로 exe 빌드
+        run: pyinstaller build.spec --clean
+
+      - name: 빌드 결과 확인
+        run: |
+          if (Test-Path "dist/ExhibitionCMS.exe") {
+            Write-Host "✅ ExhibitionCMS.exe 빌드 성공"
+            Get-Item "dist/ExhibitionCMS.exe" | Select-Object Name, Length, LastWriteTime
+          } elseif (Test-Path "dist/ExhibitionCMS") {
+            Write-Host "✅ ExhibitionCMS 폴더 빌드 성공"
+            Get-ChildItem "dist/ExhibitionCMS" | Select-Object Name, Length
+          } else {
+            Write-Host "❌ 빌드 실패"
+            exit 1
+          }
+
+      - name: Inno Setup 설치
+        run: |
+          choco install innosetup -y
+          refreshenv
+
+      - name: 설치 파일 빌드 (Setup.exe)
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          Write-Host "✅ 설치 파일 생성 완료"
+
+      - name: 설치 파일 확인
+        run: Get-ChildItem Output/
+
+      - name: 아티팩트 업로드 (설치 파일)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExhibitionCMS-Setup-Windows
+          path: Output/ExhibitionCMS-Setup-*.exe
+          retention-days: 30
+
+      - name: 아티팩트 업로드 (단독 실행 파일)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExhibitionCMS-exe-only
+          path: dist/ExhibitionCMS.exe
+          retention-days: 30
+
+      - name: GitHub Release 생성 (태그 푸시 시)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Exhibition CMS ${{ github.ref_name }}
+          body: |
+            ## Exhibition CMS ${{ github.ref_name }}
+
+            ### 전시장 통합 제어 시스템
+
+            **설치 방법:**
+            1. `ExhibitionCMS-Setup-*.exe` 다운로드
+            2. 설치 마법사 실행
+            3. 바탕화면 아이콘으로 실행
+
+            **기본 로그인:** admin / admin123
+
+            **지원 기능:**
+            - PJLink 프로젝터 제어
+            - 컴퓨터 WOL / 원격 종료
+            - ArtNet / USB DMX 조명 제어
+            - OSC 신호 전송
+            - 캘린더 기반 스케줄링
+            - 다중 전시 구역 관리
+          files: |
+            Output/ExhibitionCMS-Setup-*.exe
+            dist/ExhibitionCMS.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
