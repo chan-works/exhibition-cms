@@ -118,9 +118,23 @@ class ComputerConfigWidget(QWidget):
         self.host.editingFinished.connect(self._auto_fill_broadcast)
         layout.addRow("IP/호스트명 *", self.host)
 
+        mac_row = QHBoxLayout()
+        mac_row.setSpacing(6)
         self.mac = QLineEdit(cfg.get("mac", ""))
         self.mac.setPlaceholderText("AA:BB:CC:DD:EE:FF")
-        layout.addRow("MAC 주소 (WOL용)", self.mac)
+        mac_row.addWidget(self.mac)
+        mac_detect_btn = QPushButton("자동 감지")
+        mac_detect_btn.setFixedWidth(70)
+        mac_detect_btn.setFixedHeight(30)
+        mac_detect_btn.setToolTip("PC가 켜진 상태에서 IP로 MAC 주소를 자동으로 읽어옵니다")
+        mac_detect_btn.setStyleSheet("""
+            QPushButton { background-color: #1a4a80; color: white;
+                border: none; border-radius: 4px; font-size: 11px; }
+            QPushButton:hover { background-color: #2a5a90; }
+        """)
+        mac_detect_btn.clicked.connect(self._auto_detect_mac)
+        mac_row.addWidget(mac_detect_btn)
+        layout.addRow("MAC 주소 (WOL용)", mac_row)
 
         # Broadcast row with auto-fill button
         bc_row = QHBoxLayout()
@@ -168,11 +182,31 @@ class ComputerConfigWidget(QWidget):
             return
         try:
             import ipaddress
-            # Try /24 first, then check if it changes
             net24 = ipaddress.IPv4Network(f"{ip}/24", strict=False)
             self.broadcast.setText(str(net24.broadcast_address))
         except Exception:
             pass
+
+    def _auto_detect_mac(self):
+        ip = self.host.text().strip()
+        if not ip:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self.parentWidget(), "오류", "IP 주소를 먼저 입력하세요.")
+            return
+        from controllers.network_scanner import ping, get_mac_from_arp
+        # Ping first to populate ARP table
+        ping(ip, timeout=1.0)
+        mac = get_mac_from_arp(ip)
+        if mac:
+            self.mac.setText(mac)
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self.parentWidget(), "MAC 감지 실패",
+                f"{ip} 의 MAC 주소를 찾을 수 없습니다.\n\n"
+                "PC가 켜져 있고 같은 네트워크인지 확인하세요.\n"
+                "또는 직접 입력하세요 (ipconfig /all 명령으로 확인 가능)."
+            )
 
     def get_config(self):
         return {

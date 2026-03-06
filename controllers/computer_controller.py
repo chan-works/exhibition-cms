@@ -82,18 +82,26 @@ class ComputerController:
         self.shutdown_method = shutdown_method
 
     def power_on(self) -> Tuple[bool, str]:
-        """Wake-on-LAN - tries multiple broadcast targets and ports."""
+        """Wake-on-LAN — sends magic packet 3 times for reliability."""
         if not self.mac:
             return False, "MAC 주소가 설정되지 않았습니다.\n→ 디바이스 설정에서 MAC 주소를 입력하세요."
-        try:
-            results = send_wol_all_methods(self.mac, self.host, self.broadcast)
-            success = any(r.startswith("✓") for r in results)
-            detail = "\n".join(results)
-            if success:
-                return True, f"WOL 패킷 전송 완료\n{detail}"
-            return False, f"모든 WOL 방식 실패\n{detail}"
-        except Exception as e:
-            return False, f"WOL 전송 실패: {e}"
+        import time
+        all_results = []
+        success = False
+        for attempt in range(3):
+            if attempt > 0:
+                time.sleep(0.5)
+            try:
+                results = send_wol_all_methods(self.mac, self.host, self.broadcast)
+                if any(r.startswith("✓") for r in results):
+                    success = True
+                all_results.extend(results)
+            except Exception as e:
+                all_results.append(f"✗ 시도 {attempt+1}: {e}")
+        detail = "\n".join(dict.fromkeys(all_results))  # deduplicate
+        if success:
+            return True, f"WOL 패킷 전송 완료 (3회)\n{detail}"
+        return False, f"WOL 실패\n{detail}\n\n확인 사항:\n1. BIOS에서 Wake-on-LAN 활성화\n2. 네트워크 어댑터 → 전원 관리 → '이 장치로 컴퓨터를 켤 수 있음' 체크\n3. PC가 완전 종료 상태여야 함 (절전 X)"
 
     def wol_diagnose(self) -> str:
         """Send WOL via all methods and return detailed result string."""
