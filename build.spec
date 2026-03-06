@@ -11,7 +11,7 @@ a = Analysis(
     ['main.py'],
     pathex=[str(Path('.').resolve())],
     binaries=[],
-    datas=[],
+    datas=[('screenshot_server.py', '.')],
     hiddenimports=[
         'PySide6.QtCore',
         'PySide6.QtGui',

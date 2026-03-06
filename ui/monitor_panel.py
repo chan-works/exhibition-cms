@@ -14,9 +14,23 @@ from PySide6.QtGui import QPixmap, QImage
 SCREENSHOT_PORT = 19999
 REFRESH_INTERVAL_MS = 3000  # 3 seconds
 
-# screenshot_server.py path (same directory as this package's project root)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SCREENSHOT_SERVER_PATH = _PROJECT_ROOT / "screenshot_server.py"
+# screenshot_server.py path — works both as script and PyInstaller exe
+def _find_screenshot_server() -> Path:
+    import sys
+    candidates = []
+    # PyInstaller bundled exe: files are extracted to sys._MEIPASS
+    if hasattr(sys, "_MEIPASS"):
+        candidates.append(Path(sys._MEIPASS) / "screenshot_server.py")
+    # Next to the exe / script entry point
+    candidates.append(Path(sys.executable).parent / "screenshot_server.py")
+    # Project root when running as .py script
+    candidates.append(Path(__file__).resolve().parent.parent / "screenshot_server.py")
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[-1]  # return last candidate for error message
+
+SCREENSHOT_SERVER_PATH = _find_screenshot_server()
 
 
 class ServerLaunchWorker(QObject):
