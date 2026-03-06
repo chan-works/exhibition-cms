@@ -36,6 +36,16 @@ class PJLinkController:
             response = sock.recv(512).decode("utf-8", errors="ignore").strip()
             sock.close()
             return True, response
+        except ConnectionRefusedError:
+            return False, f"연결 거부됨 ({self.host}:{self.port})\n→ 기기가 꺼져있거나 PJLink가 비활성화 상태입니다."
+        except TimeoutError:
+            return False, f"연결 시간 초과 ({self.host}:{self.port})\n→ IP 주소를 확인하세요."
+        except OSError as e:
+            if e.errno in (10061, 111):
+                return False, f"연결 거부됨 ({self.host}:{self.port})\n→ 기기가 꺼져있거나 네트워크를 확인하세요."
+            if e.errno in (10060, 110):
+                return False, f"연결 시간 초과 ({self.host}:{self.port})\n→ IP 주소를 확인하세요."
+            return False, f"네트워크 오류: {e}"
         except Exception as e:
             return False, str(e)
 

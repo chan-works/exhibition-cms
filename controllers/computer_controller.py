@@ -40,12 +40,12 @@ class ComputerController:
     def power_on(self) -> Tuple[bool, str]:
         """Wake-on-LAN."""
         if not self.mac:
-            return False, "MAC 주소가 설정되지 않았습니다"
+            return False, "MAC 주소가 설정되지 않았습니다.\n→ 디바이스 설정에서 MAC 주소를 입력하세요."
         try:
             send_magic_packet(self.mac, broadcast=self.broadcast, port=self.wol_port)
             return True, f"WOL 패킷 전송 완료: {self.mac}"
         except Exception as e:
-            return False, str(e)
+            return False, f"WOL 전송 실패: {e}"
 
     def power_off(self) -> Tuple[bool, str]:
         """Remote shutdown."""

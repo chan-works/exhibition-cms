@@ -154,6 +154,14 @@ class ExhibitionScheduler:
             else:
                 return False, f"알 수 없는 디바이스 타입: {dtype}"
 
+        except ConnectionRefusedError:
+            return False, f"연결 거부됨 → 기기가 꺼져있거나 네트워크를 확인하세요. (타입: {dtype})"
+        except OSError as e:
+            if e.errno in (10061, 111):
+                return False, f"연결 거부됨 ({dtype}) → 기기 전원 및 네트워크를 확인하세요."
+            if e.errno in (10060, 110):
+                return False, f"연결 시간 초과 ({dtype}) → IP 주소를 확인하세요."
+            return False, f"네트워크 오류 ({dtype}): {e}"
         except Exception as e:
             return False, str(e)
 

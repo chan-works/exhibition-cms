@@ -21,6 +21,10 @@ class OscController:
             client = self._get_client()
             client.send_message(address, list(args) if len(args) > 1 else (args[0] if args else []))
             return True, "전송 성공"
+        except OSError as e:
+            if e.errno in (10061, 111):
+                return False, f"연결 거부됨 ({self.host}:{self.port})\n→ 대상 프로그램이 실행 중인지 확인하세요."
+            return False, f"네트워크 오류: {e}"
         except Exception as e:
             return False, str(e)
 
