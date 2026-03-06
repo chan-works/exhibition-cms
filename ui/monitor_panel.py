@@ -285,7 +285,8 @@ class ScreenFetcher(QObject):
 class ScreenTile(QFrame):
     """Single PC screen monitoring tile."""
 
-    clicked = Signal(str)  # device_id
+    clicked = Signal(str)        # device_id
+    start_server = Signal(dict)  # device — request parent to start server
 
     def __init__(self, device: dict, parent=None):
         super().__init__(parent)
@@ -295,7 +296,7 @@ class ScreenTile(QFrame):
         self.url = f"http://{host}:{SCREENSHOT_PORT}/screenshot"
         self._online = False
         self.setObjectName("card")
-        self.setMinimumSize(280, 200)
+        self.setMinimumSize(280, 220)
         self.setMaximumWidth(400)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -305,16 +306,14 @@ class ScreenTile(QFrame):
                 border: 1px solid #0f3460;
                 border-radius: 8px;
             }
-            QFrame#card:hover {
-                border-color: #e94560;
-            }
+            QFrame#card:hover { border-color: #e94560; }
         """)
         self._build_ui()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
         # Header
         hdr = QHBoxLayout()
@@ -337,7 +336,7 @@ class ScreenTile(QFrame):
         # Screen area
         self.screen_lbl = QLabel()
         self.screen_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.screen_lbl.setMinimumHeight(150)
+        self.screen_lbl.setMinimumHeight(140)
         self.screen_lbl.setStyleSheet("""
             background-color: #0a0a15;
             border-radius: 4px;
@@ -347,11 +346,28 @@ class ScreenTile(QFrame):
         self.screen_lbl.setText("연결 대기 중...")
         layout.addWidget(self.screen_lbl)
 
-        # Footer
+        # Footer row: time + "서버 시작" button
+        footer = QHBoxLayout()
         self.time_lbl = QLabel("")
         self.time_lbl.setStyleSheet("color: #404050; font-size: 10px;")
-        self.time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(self.time_lbl)
+        footer.addWidget(self.time_lbl)
+        footer.addStretch()
+
+        self.start_btn = QPushButton("서버 시작")
+        self.start_btn.setFixedHeight(24)
+        self.start_btn.setFixedWidth(72)
+        self.start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a4a80; color: white;
+                border: none; border-radius: 3px; font-size: 11px;
+            }
+            QPushButton:hover { background-color: #2a5a90; }
+            QPushButton:disabled { background-color: #333; color: #666; }
+        """)
+        self.start_btn.setVisible(False)
+        self.start_btn.clicked.connect(lambda: self.start_server.emit(self.device))
+        footer.addWidget(self.start_btn)
+        layout.addLayout(footer)
 
     def update_screen(self, jpeg_bytes: bytes):
         img = QImage()
@@ -365,18 +381,26 @@ class ScreenTile(QFrame):
             self.screen_lbl.setPixmap(pixmap)
             self.screen_lbl.setText("")
         self._set_online(True)
+        self.start_btn.setVisible(False)
         self.time_lbl.setText(datetime.now().strftime("%H:%M:%S"))
 
     def set_error(self, msg: str):
         self.screen_lbl.setPixmap(QPixmap())
         if "refused" in msg.lower() or "10061" in msg:
-            self.screen_lbl.setText("오프라인\n(PC 꺼짐 또는 서버 미실행)")
+            self.screen_lbl.setText("서버 미실행\n(아래 '서버 시작' 버튼을 누르세요)")
         elif "timed out" in msg.lower() or "timeout" in msg.lower():
-            self.screen_lbl.setText("응답 없음\n(네트워크 확인)")
+            self.screen_lbl.setText("응답 없음\n(네트워크 또는 IP 확인)")
         else:
-            self.screen_lbl.setText(f"연결 실패\n{msg[:40]}")
+            self.screen_lbl.setText(f"연결 실패\n{msg[:50]}")
         self._set_online(False)
+        self.start_btn.setVisible(True)
         self.time_lbl.setText(datetime.now().strftime("%H:%M:%S"))
+
+    def set_starting(self):
+        """Show 'starting server...' state."""
+        self.screen_lbl.setText("서버 시작 중...")
+        self.start_btn.setEnabled(False)
+        self.start_btn.setText("시작 중...")
 
     def _set_online(self, online: bool):
         self._online = online
@@ -511,6 +535,7 @@ class MonitorPanel(QWidget):
         for i, dev in enumerate(computer_devices):
             tile = ScreenTile(dev)
             tile.clicked.connect(self._on_tile_click)
+            tile.start_server.connect(self._start_server_for_tile)
             self._tiles[str(dev["id"])] = tile
             self.grid_layout.addWidget(tile, i // cols, i % cols)
 
@@ -623,6 +648,53 @@ class MonitorPanel(QWidget):
         if errors:
             msg += f"\n\n오류:\n" + "\n".join(errors)
         QMessageBox.information(self, "설치파일 생성 완료", msg)
+
+    def _start_server_for_tile(self, device: dict):
+        """Called when user clicks '서버 시작' on a tile."""
+        dev_id = str(device["id"])
+        tile = self._tiles.get(dev_id)
+        if tile:
+            tile.set_starting()
+
+        worker = ServerLaunchWorker([device])
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+
+        def on_log(msg):
+            # If success signal in log, refresh tile immediately
+            if "✓" in msg and dev_id in self._tiles:
+                QTimer.singleShot(2000, lambda: self._fetch_one(dev_id))
+
+        def on_finished():
+            thread.quit()
+            if tile:
+                tile.start_btn.setEnabled(True)
+                tile.start_btn.setText("서버 시작")
+
+        worker.log.connect(on_log)
+        worker.finished.connect(on_finished)
+        thread.start()
+
+    def _fetch_one(self, dev_id: str):
+        """Fetch screenshot for a single tile immediately."""
+        tile = self._tiles.get(dev_id)
+        if not tile:
+            return
+        prev = self._fetchers.get(dev_id)
+        if prev and prev[0].isRunning():
+            return
+        thread = QThread()
+        fetcher = ScreenFetcher(dev_id, tile.url)
+        fetcher.moveToThread(thread)
+        thread.started.connect(fetcher.fetch)
+        fetcher.fetched.connect(self._on_fetched)
+        fetcher.failed.connect(self._on_failed)
+        fetcher.fetched.connect(lambda *_, t=thread: t.quit())
+        fetcher.failed.connect(lambda *_, t=thread: t.quit())
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+        self._fetchers[dev_id] = (thread, fetcher)
 
     def _auto_start_servers(self):
         devices = self.db.get_all_devices()
