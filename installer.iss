@@ -2,7 +2,12 @@
 ; https://jrsoftware.org/isinfo.php
 
 #define MyAppName "Exhibition CMS"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
+#ifndef MyAppTag
+  #define MyAppTag "v" + MyAppVersion
+#endif
 #define MyAppPublisher "Exhibition CMS"
 #define MyAppExeName "ExhibitionCMS.exe"
 #define MyAppDescription "전시장 통합 제어 시스템"
@@ -18,7 +23,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=Output
-OutputBaseFilename=ExhibitionCMS-Setup-v{#MyAppVersion}
+OutputBaseFilename=ExhibitionCMS-Setup-{#MyAppTag}
 SetupIconFile=
 Compression=lzma2/ultra64
 SolidCompression=yes

@@ -59,24 +59,29 @@ jobs:
         id: version
         run: |
           $tag = "${{ github.ref_name }}"
+          if (-not $tag) { $tag = "v0.0.0" }
           $ver = $tag.TrimStart('v')
+          Write-Host "tag=$tag  ver=$ver"
           echo "tag=$tag" >> $env:GITHUB_OUTPUT
           echo "ver=$ver" >> $env:GITHUB_OUTPUT
 
       - name: 설치 파일 빌드 (Setup.exe)
         run: |
           $ver = "${{ steps.version.outputs.ver }}"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss /DMyAppVersion=$ver
+          $tag = "${{ steps.version.outputs.tag }}"
+          Write-Host "Building version: $ver (tag: $tag)"
+          # /D 값에 따옴표 추가 — ISCC가 1.0.x 형식 버전을 올바르게 받도록
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss `
+            "/DMyAppVersion=$ver" `
+            "/DMyAppTag=$tag"
           Write-Host "✅ 설치 파일 생성 완료"
+          Get-ChildItem Output/
 
-      - name: 파일명에 버전 추가
+      - name: 파일명에 버전 추가 (단독 EXE)
         run: |
           $tag = "${{ steps.version.outputs.tag }}"
-          # Rename standalone EXE
           mv dist/ExhibitionCMS.exe dist/ExhibitionCMS-$tag.exe
           Write-Host "✅ dist/ExhibitionCMS-$tag.exe"
-          # Confirm Setup EXE name
-          Get-ChildItem Output/
 
       - name: 아티팩트 업로드 (설치 파일)
         uses: actions/upload-artifact@v4
