@@ -355,6 +355,13 @@ class DeviceDialog(QDialog):
         self.wol_diag_btn.setVisible(False)
         btn_layout.addWidget(self.wol_diag_btn)
 
+        self.wol_enable_btn = QPushButton("WOL 원격 활성화")
+        self.wol_enable_btn.setToolTip("대상 PC가 켜진 상태에서 WOL 설정을 원격으로 자동 활성화합니다")
+        self.wol_enable_btn.setObjectName("success")
+        self.wol_enable_btn.clicked.connect(self._wol_enable_remote)
+        self.wol_enable_btn.setVisible(False)
+        btn_layout.addWidget(self.wol_enable_btn)
+
         cancel_btn = QPushButton("취소")
         cancel_btn.clicked.connect(self.reject)
         save_btn = QPushButton("저장")
@@ -378,7 +385,9 @@ class DeviceDialog(QDialog):
 
     def _update_wol_btn(self):
         dtype = self.type_combo.currentData()
-        self.wol_diag_btn.setVisible(dtype == "computer")
+        is_computer = dtype == "computer"
+        self.wol_diag_btn.setVisible(is_computer)
+        self.wol_enable_btn.setVisible(is_computer)
 
     def _open_network_scan(self):
         from ui.network_scan_dialog import NetworkScanDialog
@@ -474,6 +483,38 @@ class DeviceDialog(QDialog):
         )
         result = ctrl.wol_diagnose()
         QMessageBox.information(self, "WOL 진단 결과", result)
+
+    def _wol_enable_remote(self):
+        if not self.config_widget:
+            return
+        cfg = self.config_widget.get_config()
+        host = cfg.get("host", "")
+        if not host:
+            QMessageBox.warning(self, "오류", "IP 주소를 먼저 입력하세요.")
+            return
+        reply = QMessageBox.question(
+            self, "WOL 원격 설정",
+            f"'{host}' PC의 WOL(Wake on Magic Packet)을 원격으로 활성화합니다.\n\n"
+            "※ 대상 PC가 현재 켜져 있어야 합니다.\n"
+            "※ SSH 또는 Windows 원격 PowerShell 권한이 필요합니다.\n\n"
+            "계속하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        from controllers.computer_controller import ComputerController
+        ctrl = ComputerController(
+            host=host,
+            mac=cfg.get("mac", ""),
+            shutdown_method=cfg.get("shutdown_method", "wmi"),
+            ssh_user=cfg.get("ssh_user", ""),
+            ssh_password=cfg.get("ssh_password", ""),
+        )
+        ok, msg = ctrl.enable_wol_remote()
+        if ok:
+            QMessageBox.information(self, "WOL 설정 완료", msg)
+        else:
+            QMessageBox.critical(self, "WOL 설정 실패", msg)
 
     def _save(self):
         name = self.name_input.text().strip()

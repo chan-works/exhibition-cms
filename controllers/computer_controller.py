@@ -165,6 +165,94 @@ class ComputerController:
             subprocess.run(["sudo", "shutdown", "-h", "now"])
         return True, "로컬 시스템 종료 중"
 
+    def enable_wol_remote(self) -> Tuple[bool, str]:
+        """
+        Remotely enable WOL on Windows network adapters via PowerShell (WMI/SSH).
+        The target PC must be ON and reachable.
+        """
+        ps_script = r"""
+$adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+$results = @()
+foreach ($adapter in $adapters) {
+    try {
+        # Enable Wake on Magic Packet via advanced property
+        $params = @{
+            Name         = $adapter.Name
+            RegistryKeyword = 'WakeOnMagicPacket'
+            RegistryValue   = 1
+        }
+        Set-NetAdapterAdvancedProperty @params -ErrorAction SilentlyContinue
+
+        # Enable via power management (WMI)
+        $wmi = Get-WmiObject -Class MSPower_DeviceWakeEnable `
+            -Namespace root\wmi -ErrorAction SilentlyContinue |
+            Where-Object { $_.InstanceName -like "*$($adapter.InterfaceDescription)*" }
+        if ($wmi) { $wmi.Enable = $true; $wmi.Put() | Out-Null }
+
+        $results += "OK: $($adapter.Name)"
+    } catch {
+        $results += "SKIP: $($adapter.Name) - $_"
+    }
+}
+
+# Also disable 'Fast Startup' which can block WOL
+powercfg /hibernate off 2>$null
+
+$results -join "`n"
+"""
+        if self.shutdown_method == "ssh":
+            return self._run_ps_via_ssh(ps_script)
+        else:
+            return self._run_ps_via_wmi(ps_script)
+
+    def _run_ps_via_wmi(self, script: str) -> Tuple[bool, str]:
+        if platform.system() != "Windows":
+            return False, "WMI 방식은 Windows CMS에서만 사용 가능합니다.\nSSH 방식을 사용하세요."
+        try:
+            import tempfile, os
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".ps1",
+                                             delete=False, encoding="utf-8") as f:
+                f.write(script)
+                tmp = f.name
+            cmd = [
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-Command",
+                f"Invoke-Command -ComputerName {self.host} "
+                f"-ScriptBlock {{ {script.strip()} }}"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            os.unlink(tmp)
+            if result.returncode == 0:
+                return True, f"WOL 설정 완료:\n{result.stdout.strip()}"
+            return False, result.stderr.strip() or "실행 실패"
+        except Exception as e:
+            return False, str(e)
+
+    def _run_ps_via_ssh(self, script: str) -> Tuple[bool, str]:
+        try:
+            import paramiko
+        except ImportError:
+            return False, "paramiko 패키지가 필요합니다: pip install paramiko"
+        if not self.ssh_user:
+            return False, "SSH 사용자 이름이 설정되지 않았습니다."
+        try:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(self.host, username=self.ssh_user,
+                        password=self.ssh_password, timeout=10)
+            cmd = f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{script.strip()}"'
+            _, stdout, stderr = ssh.exec_command(cmd, timeout=30)
+            out = stdout.read().decode(errors="ignore").strip()
+            err = stderr.read().decode(errors="ignore").strip()
+            ssh.close()
+            if out:
+                return True, f"WOL 설정 완료:\n{out}"
+            if err:
+                return False, err
+            return True, "WOL 설정 명령 전송 완료"
+        except Exception as e:
+            return False, str(e)
+
     def test_ping(self) -> Tuple[bool, str]:
         """Ping the host to check if it is online."""
         try:
