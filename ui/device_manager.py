@@ -5,7 +5,49 @@ from PySide6.QtWidgets import (
     QComboBox, QCheckBox, QMessageBox, QHeaderView, QTabWidget,
     QSpinBox, QTextEdit, QFrame, QScrollArea
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QThread, QObject, QTimer
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+class PingWorker(QObject):
+    ping_result = Signal(int, bool)   # device_id, is_online
+    finished = Signal()
+
+    def __init__(self, devices):
+        super().__init__()
+        self._devices = [d for d in devices
+                         if d.get("device_type") == "computer"
+                         and d.get("config", {}).get("host")]
+
+    def run(self):
+        import platform
+        import subprocess
+
+        def do_ping(dev):
+            host = dev.get("config", {}).get("host", "")
+            try:
+                if platform.system() == "Windows":
+                    cmd = ["ping", "-n", "1", "-w", "1000", host]
+                else:
+                    cmd = ["ping", "-c", "1", "-W", "1", host]
+                result = subprocess.run(cmd, capture_output=True, timeout=3)
+                return dev["id"], result.returncode == 0
+            except Exception:
+                return dev["id"], False
+
+        if not self._devices:
+            self.finished.emit()
+            return
+
+        with ThreadPoolExecutor(max_workers=min(20, len(self._devices))) as ex:
+            futures = {ex.submit(do_ping, d): d for d in self._devices}
+            for future in as_completed(futures):
+                try:
+                    dev_id, online = future.result()
+                    self.ping_result.emit(dev_id, online)
+                except Exception:
+                    pass
+        self.finished.emit()
+
 
 DEVICE_TYPES = {
     "pjlink":   "PJLink (프로젝터/디스플레이)",
@@ -510,6 +552,7 @@ class DeviceDialog(QDialog):
         dtype = self.type_combo.currentData()
         if self.config_widget:
             self.config_container.removeWidget(self.config_widget)
+            self.config_widget.setParent(None)   # 즉시 레이아웃에서 분리
             self.config_widget.deleteLater()
             self.config_widget = None
 
@@ -645,6 +688,12 @@ class DeviceManager(QWidget):
         self.db = db
         self.current_user = current_user
         self.scheduler = scheduler
+        self._ping_results = {}       # device_id → bool
+        self._ping_thread = None
+        self._ping_worker = None
+        self._ip_timer = QTimer(self)
+        self._ip_timer.setInterval(30_000)
+        self._ip_timer.timeout.connect(self._run_ping_check)
         self._build_ui()
         self.refresh()
 
@@ -658,6 +707,19 @@ class DeviceManager(QWidget):
         title.setStyleSheet("font-size: 18px; font-weight: bold; color: #e94560;")
         header.addWidget(title)
         header.addStretch()
+
+        self.ip_check_btn = QPushButton("IP 자동 확인 시작")
+        self.ip_check_btn.setFixedHeight(30)
+        self.ip_check_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a4a80; color: white;
+                border: none; border-radius: 4px;
+                padding: 0 12px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #2a5a90; }
+        """)
+        self.ip_check_btn.clicked.connect(self._toggle_ip_check)
+        header.addWidget(self.ip_check_btn)
 
         if self.current_user["role"] in ("admin", "operator"):
             add_btn = QPushButton("+ 디바이스 추가")
@@ -688,15 +750,28 @@ class DeviceManager(QWidget):
         self.table.setRowCount(len(devices))
         for i, dev in enumerate(devices):
             cfg = dev.get("config", {})
-            self.table.setItem(i, 0, QTableWidgetItem(dev["name"]))
+            name_item = QTableWidgetItem(dev["name"])
+            name_item.setData(Qt.ItemDataRole.UserRole, {
+                "id": dev["id"],
+                "device_type": dev.get("device_type", ""),
+                "is_enabled": bool(dev.get("is_enabled", 1)),
+            })
+            self.table.setItem(i, 0, name_item)
             self.table.setItem(i, 1, QTableWidgetItem(DEVICE_TYPES.get(dev["device_type"], dev["device_type"])))
             self.table.setItem(i, 2, QTableWidgetItem(dev.get("zone_name") or "-"))
             host_str = cfg.get("host", cfg.get("port", "-")) if isinstance(cfg, dict) else "-"
             self.table.setItem(i, 3, QTableWidgetItem(str(host_str)))
-            status_item = QTableWidgetItem("활성" if dev.get("is_enabled", 1) else "비활성")
-            status_item.setForeground(
-                Qt.GlobalColor.green if dev.get("is_enabled", 1) else Qt.GlobalColor.red
-            )
+            is_enabled = bool(dev.get("is_enabled", 1))
+            dev_id = dev["id"]
+            if dev.get("device_type") == "computer" and dev_id in self._ping_results:
+                online = self._ping_results[dev_id]
+                text = ("● 온라인" if online else "○ 오프라인") + (" (활성)" if is_enabled else " (비활성)")
+                color = Qt.GlobalColor.green if online else Qt.GlobalColor.red
+            else:
+                text = "활성" if is_enabled else "비활성"
+                color = Qt.GlobalColor.green if is_enabled else Qt.GlobalColor.red
+            status_item = QTableWidgetItem(text)
+            status_item.setForeground(color)
             self.table.setItem(i, 4, status_item)
 
             btn_widget = QWidget()
@@ -748,6 +823,59 @@ class DeviceManager(QWidget):
 
             self.table.setCellWidget(i, 5, btn_widget)
             self.table.setRowHeight(i, 40)
+
+    def _toggle_ip_check(self):
+        if self._ip_timer.isActive():
+            self._ip_timer.stop()
+            self.ip_check_btn.setText("IP 자동 확인 시작")
+            self.ip_check_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1a4a80; color: white;
+                    border: none; border-radius: 4px;
+                    padding: 0 12px; font-size: 12px;
+                }
+                QPushButton:hover { background-color: #2a5a90; }
+            """)
+        else:
+            self._ip_timer.start()
+            self.ip_check_btn.setText("IP 자동 확인 중지")
+            self.ip_check_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #8b2222; color: white;
+                    border: none; border-radius: 4px;
+                    padding: 0 12px; font-size: 12px;
+                }
+                QPushButton:hover { background-color: #a03030; }
+            """)
+            self._run_ping_check()
+
+    def _run_ping_check(self):
+        if self._ping_thread and self._ping_thread.isRunning():
+            return
+        devices = self.db.get_all_devices()
+        self._ping_worker = PingWorker(devices)
+        self._ping_thread = QThread()
+        self._ping_worker.moveToThread(self._ping_thread)
+        self._ping_thread.started.connect(self._ping_worker.run)
+        self._ping_worker.ping_result.connect(self._on_ping_result)
+        self._ping_worker.finished.connect(self._ping_thread.quit)
+        self._ping_thread.start()
+
+    def _on_ping_result(self, dev_id, is_online):
+        self._ping_results[dev_id] = is_online
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 0)
+            if name_item is None:
+                continue
+            meta = name_item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(meta, dict) and meta.get("id") == dev_id:
+                is_enabled = meta.get("is_enabled", True)
+                text = ("● 온라인" if is_online else "○ 오프라인") + (" (활성)" if is_enabled else " (비활성)")
+                color = Qt.GlobalColor.green if is_online else Qt.GlobalColor.red
+                new_status = QTableWidgetItem(text)
+                new_status.setForeground(color)
+                self.table.setItem(row, 4, new_status)
+                break
 
     def _open_screen_viewer(self, device):
         from ui.screen_viewer import ScreenViewerDialog

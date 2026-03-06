@@ -1,15 +1,112 @@
 import urllib.request
+import os
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QGridLayout, QSizePolicy, QMessageBox
+    QScrollArea, QFrame, QGridLayout, QSizePolicy, QMessageBox,
+    QDialog, QTextEdit
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QThread, QObject
 from PySide6.QtGui import QPixmap, QImage
 
 SCREENSHOT_PORT = 19999
 REFRESH_INTERVAL_MS = 3000  # 3 seconds
+
+# screenshot_server.py path (same directory as this package's project root)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SCREENSHOT_SERVER_PATH = _PROJECT_ROOT / "screenshot_server.py"
+
+
+class ServerLaunchWorker(QObject):
+    """SSH into each computer device and start screenshot_server.py."""
+    log = Signal(str)        # progress messages
+    finished = Signal()
+
+    def __init__(self, devices):
+        super().__init__()
+        # Only computer devices with SSH credentials
+        self._devices = [
+            d for d in devices
+            if d.get("device_type") == "computer"
+            and d.get("config", {}).get("ssh_user")
+            and d.get("config", {}).get("host")
+        ]
+
+    def run(self):
+        try:
+            import paramiko
+        except ImportError:
+            self.log.emit("❌ paramiko 미설치 — pip install paramiko 실행 후 재시도하세요.")
+            self.finished.emit()
+            return
+
+        if not SCREENSHOT_SERVER_PATH.exists():
+            self.log.emit(f"❌ screenshot_server.py 파일을 찾을 수 없습니다:\n   {SCREENSHOT_SERVER_PATH}")
+            self.finished.emit()
+            return
+
+        server_code = SCREENSHOT_SERVER_PATH.read_text(encoding="utf-8")
+
+        for dev in self._devices:
+            cfg = dev.get("config", {})
+            host = cfg.get("host", "")
+            user = cfg.get("ssh_user", "")
+            password = cfg.get("ssh_password", "")
+            name = dev.get("name", host)
+            self.log.emit(f"\n▶ [{name}] {host} 연결 중...")
+
+            try:
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(host, username=user, password=password, timeout=10)
+
+                # Upload screenshot_server.py via SFTP
+                sftp = ssh.open_sftp()
+                remote_path = "/tmp/screenshot_server.py"
+                try:
+                    # Try Windows home dir first
+                    _, out, _ = ssh.exec_command("echo %USERPROFILE%", timeout=3)
+                    win_home = out.read().decode(errors="ignore").strip()
+                    if win_home and "%" not in win_home:
+                        remote_path = win_home.replace("\\", "/") + "/screenshot_server.py"
+                except Exception:
+                    pass
+
+                with sftp.open(remote_path, "w") as f:
+                    f.write(server_code)
+                sftp.close()
+                self.log.emit(f"   ✓ screenshot_server.py 업로드 완료 → {remote_path}")
+
+                # Install dependencies (non-blocking)
+                ssh.exec_command(
+                    "pip install mss pillow --quiet 2>&1 || python -m pip install mss pillow --quiet 2>&1",
+                    timeout=5
+                )
+
+                # Kill any existing server process on port 19999
+                ssh.exec_command(
+                    f"pkill -f screenshot_server.py 2>/dev/null; "
+                    f"taskkill /F /FI \"IMAGENAME eq python.exe\" /FI \"WINDOWTITLE eq screenshot_server\" 2>nul; "
+                    f"sleep 1",
+                    timeout=5
+                )
+
+                # Start server in background
+                bg_cmd = (
+                    f"nohup python {remote_path} > /tmp/screenshot_server.log 2>&1 & "
+                    f"|| start /B pythonw {remote_path}"
+                )
+                ssh.exec_command(bg_cmd, timeout=3)
+                ssh.close()
+                self.log.emit(f"   ✓ 서버 시작 명령 전송 완료")
+
+            except Exception as e:
+                self.log.emit(f"   ❌ 실패: {e}")
+
+        self.log.emit("\n완료.")
+        self.finished.emit()
 
 
 class ScreenFetcher(QObject):
@@ -163,6 +260,19 @@ class MonitorPanel(QWidget):
         header.addWidget(title)
         header.addStretch()
 
+        self.auto_start_btn = QPushButton("서버 자동 시작 (SSH)")
+        self.auto_start_btn.setFixedHeight(30)
+        self.auto_start_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a4a80; color: white;
+                border: none; border-radius: 4px;
+                padding: 0 12px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #2a5a90; }
+        """)
+        self.auto_start_btn.clicked.connect(self._auto_start_servers)
+        header.addWidget(self.auto_start_btn)
+
         hint_btn = QPushButton("서버 설치 안내")
         hint_btn.setFixedHeight(30)
         hint_btn.setStyleSheet("""
@@ -283,6 +393,56 @@ class MonitorPanel(QWidget):
                 lbl.setPixmap(pm.scaledToWidth(920, Qt.TransformationMode.SmoothTransformation))
                 lyt.addWidget(lbl)
                 dlg.exec()
+
+    def _auto_start_servers(self):
+        devices = self.db.get_all_devices()
+        ssh_devices = [
+            d for d in devices
+            if d.get("device_type") == "computer"
+            and d.get("config", {}).get("ssh_user")
+        ]
+        if not ssh_devices:
+            QMessageBox.warning(
+                self, "SSH 미설정",
+                "SSH 사용자명이 설정된 컴퓨터 디바이스가 없습니다.\n\n"
+                "디바이스 관리 → 컴퓨터 편집 → SSH 사용자/비밀번호를 입력하세요."
+            )
+            return
+
+        self.auto_start_btn.setEnabled(False)
+        self.auto_start_btn.setText("시작 중...")
+
+        # Log dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle("서버 자동 시작")
+        dlg.resize(520, 360)
+        dlg.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        layout = QVBoxLayout(dlg)
+        log_box = QTextEdit()
+        log_box.setReadOnly(True)
+        log_box.setStyleSheet("background:#0a0a15; color:#c0d0e0; font-family:monospace; font-size:12px;")
+        layout.addWidget(log_box)
+        close_btn = QPushButton("닫기")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+
+        def append_log(msg):
+            log_box.append(msg)
+
+        worker = ServerLaunchWorker(devices)
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.log.connect(append_log)
+
+        def on_finished():
+            thread.quit()
+            self.auto_start_btn.setEnabled(True)
+            self.auto_start_btn.setText("서버 자동 시작 (SSH)")
+
+        worker.finished.connect(on_finished)
+        thread.start()
+        dlg.exec()
 
     def _show_install_hint(self):
         QMessageBox.information(
