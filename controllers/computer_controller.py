@@ -1,9 +1,42 @@
+import base64
 import subprocess
 import platform
 import socket
 import struct
 import ipaddress
+import time as _time
 from typing import Tuple, List
+
+
+def _make_elevated_wrapper(script: str) -> str:
+    """
+    Returns a PowerShell script that runs `script` elevated as SYSTEM
+    via a scheduled task, bypassing WinRM's non-elevated (filtered) token.
+    """
+    task_name = f"CMS_Elev_{int(_time.time()) % 100000}"
+    b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    return (
+        f"$tn = '{task_name}'\n"
+        f"$sf = \"$env:TEMP\\$tn.ps1\"\n"
+        f"$of = \"$env:TEMP\\$tn.txt\"\n"
+        f"$b64 = '{b64}'\n"
+        f"[IO.File]::WriteAllBytes($sf, [Convert]::FromBase64String($b64))\n"
+        f"$act = New-ScheduledTaskAction -Execute 'powershell.exe'"
+        f" -Argument \"-NoProfile -ExecutionPolicy Bypass -File `\"$sf`\" *>`\"$of`\"\"\n"
+        f"$tri = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddSeconds(2))\n"
+        f"$pri = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest\n"
+        f"$set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)\n"
+        f"Register-ScheduledTask -TaskName $tn -Action $act -Trigger $tri"
+        f" -Principal $pri -Settings $set -Force | Out-Null\n"
+        f"Start-ScheduledTask -TaskName $tn\n"
+        f"$t=0; do{{Start-Sleep 1;$t++}} while("
+        f"((Get-ScheduledTask -TaskName $tn -EA SilentlyContinue).State -eq 'Running')"
+        f" -and ($t -lt 60))\n"
+        f"Unregister-ScheduledTask -TaskName $tn -Confirm:$false -EA SilentlyContinue | Out-Null\n"
+        f"if(Test-Path $of){{"
+        f"$r=Get-Content $of -Raw; Remove-Item $sf,$of -Force -EA SilentlyContinue; $r}}\n"
+        f"else{{Remove-Item $sf -Force -EA SilentlyContinue; '완료'}}"
+    )
 
 
 def normalize_mac(mac_address: str) -> str:
@@ -211,7 +244,7 @@ $svc = Get-Service sshd -ErrorAction SilentlyContinue
         if self.shutdown_method == "ssh":
             return self._run_ps_via_ssh(ps_script)
         else:
-            return self._run_ps_via_wmi(ps_script)
+            return self._run_ps_via_wmi(_make_elevated_wrapper(ps_script))
 
     def enable_wol_remote(self) -> Tuple[bool, str]:
         """
@@ -251,7 +284,7 @@ $results -join "`n"
         if self.shutdown_method == "ssh":
             return self._run_ps_via_ssh(ps_script)
         else:
-            return self._run_ps_via_wmi(ps_script)
+            return self._run_ps_via_wmi(_make_elevated_wrapper(ps_script))
 
     def _run_ps_via_wmi(self, script: str) -> Tuple[bool, str]:
         if platform.system() != "Windows":
