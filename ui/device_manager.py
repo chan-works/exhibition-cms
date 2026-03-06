@@ -69,14 +69,42 @@ class ComputerConfigWidget(QWidget):
         super().__init__(parent)
         layout = QFormLayout(self)
         layout.setSpacing(8)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
         self.host = QLineEdit(cfg.get("host", ""))
         self.host.setPlaceholderText("192.168.1.10 또는 HOSTNAME")
+        self.host.editingFinished.connect(self._auto_fill_broadcast)
+        layout.addRow("IP/호스트명 *", self.host)
+
         self.mac = QLineEdit(cfg.get("mac", ""))
         self.mac.setPlaceholderText("AA:BB:CC:DD:EE:FF")
+        layout.addRow("MAC 주소 (WOL용)", self.mac)
+
+        # Broadcast row with auto-fill button
+        bc_row = QHBoxLayout()
+        bc_row.setSpacing(6)
         self.broadcast = QLineEdit(cfg.get("broadcast", "255.255.255.255"))
+        bc_row.addWidget(self.broadcast)
+        auto_bc_btn = QPushButton("자동")
+        auto_bc_btn.setFixedWidth(50)
+        auto_bc_btn.setFixedHeight(30)
+        auto_bc_btn.setToolTip("IP에서 서브넷 브로드캐스트 자동 계산")
+        auto_bc_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a4a80; color: white;
+                border: none; border-radius: 4px; font-size: 11px;
+            }
+            QPushButton:hover { background-color: #2a5a90; }
+        """)
+        auto_bc_btn.clicked.connect(self._auto_fill_broadcast)
+        bc_row.addWidget(auto_bc_btn)
+        layout.addRow("브로드캐스트 IP", bc_row)
+
         self.wol_port = QSpinBox()
         self.wol_port.setRange(1, 65535)
         self.wol_port.setValue(int(cfg.get("wol_port", 9)))
+        layout.addRow("WOL 포트", self.wol_port)
+
         self.shutdown_method = QComboBox()
         self.shutdown_method.addItem("Windows (net shutdown)", "wmi")
         self.shutdown_method.addItem("SSH", "ssh")
@@ -84,16 +112,25 @@ class ComputerConfigWidget(QWidget):
         idx = self.shutdown_method.findData(cfg.get("shutdown_method", "wmi"))
         if idx >= 0:
             self.shutdown_method.setCurrentIndex(idx)
+        layout.addRow("종료 방식", self.shutdown_method)
+
         self.ssh_user = QLineEdit(cfg.get("ssh_user", ""))
         self.ssh_password = QLineEdit(cfg.get("ssh_password", ""))
         self.ssh_password.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addRow("IP/호스트명 *", self.host)
-        layout.addRow("MAC 주소 (WOL용)", self.mac)
-        layout.addRow("브로드캐스트 IP", self.broadcast)
-        layout.addRow("WOL 포트", self.wol_port)
-        layout.addRow("종료 방식", self.shutdown_method)
         layout.addRow("SSH 사용자", self.ssh_user)
         layout.addRow("SSH 비밀번호", self.ssh_password)
+
+    def _auto_fill_broadcast(self):
+        ip = self.host.text().strip()
+        if not ip or not ip[0].isdigit():
+            return
+        try:
+            import ipaddress
+            # Try /24 first, then check if it changes
+            net24 = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+            self.broadcast.setText(str(net24.broadcast_address))
+        except Exception:
+            pass
 
     def get_config(self):
         return {
@@ -273,55 +310,46 @@ class DeviceDialog(QDialog):
         self.device = device
         self.config_widget = None
         self.setWindowTitle("디바이스 편집" if device else "새 디바이스 추가")
-        self.setMinimumSize(500, 480)
+        self.setMinimumSize(560, 600)
+        self.resize(580, 680)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
         self._build_ui()
         if device:
             self._populate(device)
 
     def _build_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(14)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
+        # ── Scrollable content area ──────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 20, 24, 16)
+        layout.setSpacing(12)
+
+        # Basic info form
         form = QFormLayout()
         form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("디바이스 이름")
+        self.name_input.setFixedHeight(34)
         form.addRow("이름 *", self.name_input)
 
         self.zone_combo = QComboBox()
+        self.zone_combo.setFixedHeight(34)
         zones = self.db.get_all_zones()
         self.zone_combo.addItem("(구역 없음)", None)
         for z in zones:
             self.zone_combo.addItem(z["name"], z["id"])
         form.addRow("구역", self.zone_combo)
-
-        type_row = QHBoxLayout()
-        self.type_combo = QComboBox()
-        for key, label in DEVICE_TYPES.items():
-            self.type_combo.addItem(label, key)
-        self.type_combo.currentIndexChanged.connect(self._on_type_change)
-        self.type_combo.currentIndexChanged.connect(self._update_wol_btn)
-        type_row.addWidget(self.type_combo)
-
-        self.scan_net_btn = QPushButton("🔍 네트워크 자동 감지")
-        self.scan_net_btn.setFixedHeight(32)
-        self.scan_net_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1a4a80;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 0 10px;
-                font-size: 12px;
-            }
-            QPushButton:hover { background-color: #2a5a90; }
-        """)
-        self.scan_net_btn.clicked.connect(self._open_network_scan)
-        type_row.addWidget(self.scan_net_btn)
-        form.addRow("타입 *", type_row)
 
         self.enabled_check = QCheckBox("활성화")
         self.enabled_check.setChecked(True)
@@ -329,47 +357,117 @@ class DeviceDialog(QDialog):
 
         layout.addLayout(form)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("color: #0f3460;")
-        layout.addWidget(sep)
+        # Type + scan button (separate row, not in form)
+        type_sep = QFrame()
+        type_sep.setFrameShape(QFrame.Shape.HLine)
+        type_sep.setStyleSheet("color: #0f3460; margin: 4px 0;")
+        layout.addWidget(type_sep)
+
+        type_section = QVBoxLayout()
+        type_section.setSpacing(6)
+
+        type_lbl = QLabel("디바이스 타입 *")
+        type_lbl.setStyleSheet("color: #a0b0c0; font-size: 12px;")
+        type_section.addWidget(type_lbl)
+
+        type_row = QHBoxLayout()
+        type_row.setSpacing(8)
+        self.type_combo = QComboBox()
+        self.type_combo.setFixedHeight(34)
+        for key, label in DEVICE_TYPES.items():
+            self.type_combo.addItem(label, key)
+        self.type_combo.currentIndexChanged.connect(self._on_type_change)
+        self.type_combo.currentIndexChanged.connect(self._update_wol_btn)
+        type_row.addWidget(self.type_combo, 1)
+
+        self.scan_net_btn = QPushButton("🔍 자동 감지")
+        self.scan_net_btn.setFixedHeight(34)
+        self.scan_net_btn.setFixedWidth(110)
+        self.scan_net_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a4a80; color: white;
+                border: none; border-radius: 4px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #2a5a90; }
+        """)
+        self.scan_net_btn.clicked.connect(self._open_network_scan)
+        type_row.addWidget(self.scan_net_btn)
+        type_section.addLayout(type_row)
+        layout.addLayout(type_section)
+
+        # Device config section
+        config_sep = QFrame()
+        config_sep.setFrameShape(QFrame.Shape.HLine)
+        config_sep.setStyleSheet("color: #0f3460; margin: 4px 0;")
+        layout.addWidget(config_sep)
 
         self.config_label = QLabel("디바이스 설정")
-        self.config_label.setStyleSheet("font-weight: bold; color: #c0d0e0;")
+        self.config_label.setStyleSheet("font-weight: bold; color: #c0d0e0; font-size: 13px;")
         layout.addWidget(self.config_label)
 
         self.config_container = QVBoxLayout()
+        self.config_container.setSpacing(0)
         layout.addLayout(self.config_container)
         layout.addStretch()
 
-        btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        content.setLayout(layout)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
 
-        self.test_btn = QPushButton("연결 테스트")
-        self.test_btn.clicked.connect(self._test_connection)
-        btn_layout.addWidget(self.test_btn)
+        # ── Fixed bottom button bar ──────────────────────────────────────────
+        btn_bar = QFrame()
+        btn_bar.setFixedHeight(56)
+        btn_bar.setStyleSheet("""
+            QFrame {
+                background-color: #16213e;
+                border-top: 1px solid #0f3460;
+            }
+        """)
+        btn_bar_layout = QVBoxLayout(btn_bar)
+        btn_bar_layout.setContentsMargins(16, 8, 16, 8)
+        btn_bar_layout.setSpacing(0)
 
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        # WOL buttons (computer only)
         self.wol_diag_btn = QPushButton("WOL 진단")
+        self.wol_diag_btn.setFixedHeight(36)
         self.wol_diag_btn.setToolTip("WOL 전송 방법 전체를 시도하고 결과를 확인합니다")
         self.wol_diag_btn.clicked.connect(self._wol_diagnose)
         self.wol_diag_btn.setVisible(False)
-        btn_layout.addWidget(self.wol_diag_btn)
+        btn_row.addWidget(self.wol_diag_btn)
 
         self.wol_enable_btn = QPushButton("WOL 원격 활성화")
-        self.wol_enable_btn.setToolTip("대상 PC가 켜진 상태에서 WOL 설정을 원격으로 자동 활성화합니다")
+        self.wol_enable_btn.setFixedHeight(36)
         self.wol_enable_btn.setObjectName("success")
+        self.wol_enable_btn.setToolTip("PC가 켜진 상태에서 WOL 자동 활성화")
         self.wol_enable_btn.clicked.connect(self._wol_enable_remote)
         self.wol_enable_btn.setVisible(False)
-        btn_layout.addWidget(self.wol_enable_btn)
+        btn_row.addWidget(self.wol_enable_btn)
+
+        self.test_btn = QPushButton("연결 테스트")
+        self.test_btn.setFixedHeight(36)
+        self.test_btn.clicked.connect(self._test_connection)
+        btn_row.addWidget(self.test_btn)
+
+        btn_row.addStretch()
 
         cancel_btn = QPushButton("취소")
+        cancel_btn.setFixedHeight(36)
+        cancel_btn.setFixedWidth(72)
         cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
         save_btn = QPushButton("저장")
         save_btn.setObjectName("primary")
+        save_btn.setFixedHeight(36)
+        save_btn.setFixedWidth(72)
         save_btn.clicked.connect(self._save)
-        btn_layout.addWidget(cancel_btn)
-        btn_layout.addWidget(save_btn)
-        layout.addLayout(btn_layout)
+        btn_row.addWidget(save_btn)
+
+        btn_bar_layout.addLayout(btn_row)
+        root.addWidget(btn_bar)
 
         self._on_type_change()
 
