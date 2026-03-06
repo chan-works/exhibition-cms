@@ -473,6 +473,13 @@ class DeviceDialog(QDialog):
         btn_row.setSpacing(8)
 
         # WOL buttons (computer only)
+        self.ssh_enable_btn = QPushButton("SSH 자동 활성화")
+        self.ssh_enable_btn.setFixedHeight(36)
+        self.ssh_enable_btn.setToolTip("WinRM으로 원격 PC에 OpenSSH 서버를 자동 설치/활성화합니다")
+        self.ssh_enable_btn.clicked.connect(self._ssh_enable_remote)
+        self.ssh_enable_btn.setVisible(False)
+        btn_row.addWidget(self.ssh_enable_btn)
+
         self.wol_diag_btn = QPushButton("WOL 진단")
         self.wol_diag_btn.setFixedHeight(36)
         self.wol_diag_btn.setToolTip("WOL 전송 방법 전체를 시도하고 결과를 확인합니다")
@@ -526,6 +533,7 @@ class DeviceDialog(QDialog):
     def _update_wol_btn(self):
         dtype = self.type_combo.currentData()
         is_computer = dtype == "computer"
+        self.ssh_enable_btn.setVisible(is_computer)
         self.wol_diag_btn.setVisible(is_computer)
         self.wol_enable_btn.setVisible(is_computer)
 
@@ -624,6 +632,45 @@ class DeviceDialog(QDialog):
         )
         result = ctrl.wol_diagnose()
         QMessageBox.information(self, "WOL 진단 결과", result)
+
+    def _ssh_enable_remote(self):
+        if not self.config_widget:
+            return
+        cfg = self.config_widget.get_config()
+        host = cfg.get("host", "")
+        if not host:
+            QMessageBox.warning(self, "오류", "IP 주소를 먼저 입력하세요.")
+            return
+        reply = QMessageBox.question(
+            self, "SSH 자동 활성화",
+            f"'{host}' PC에 OpenSSH 서버를 원격으로 설치 및 활성화합니다.\n\n"
+            "※ CMS 서버와 대상 PC가 같은 네트워크(워크그룹/도메인)에 있어야 합니다.\n"
+            "※ 대상 PC에서 WinRM이 활성화되어 있어야 합니다.\n"
+            "  (WinRM 미활성화 시: 대상 PC에서 관리자 CMD로 'winrm quickconfig' 실행)\n\n"
+            "계속하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        from controllers.computer_controller import ComputerController
+        ctrl = ComputerController(
+            host=host,
+            shutdown_method=cfg.get("shutdown_method", "wmi"),
+            ssh_user=cfg.get("ssh_user", ""),
+            ssh_password=cfg.get("ssh_password", ""),
+        )
+        ok, msg = ctrl.enable_ssh_remote()
+        if ok:
+            QMessageBox.information(self, "SSH 활성화 완료", msg)
+        else:
+            QMessageBox.critical(
+                self, "SSH 활성화 실패",
+                f"{msg}\n\n"
+                "WinRM이 비활성화된 경우 대상 PC에서 직접 실행:\n"
+                "  1. 관리자 CMD 열기\n"
+                "  2. winrm quickconfig 실행\n"
+                "  3. 이후 다시 시도"
+            )
 
     def _wol_enable_remote(self):
         if not self.config_widget:

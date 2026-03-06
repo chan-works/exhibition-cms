@@ -165,6 +165,46 @@ class ComputerController:
             subprocess.run(["sudo", "shutdown", "-h", "now"])
         return True, "로컬 시스템 종료 중"
 
+    def enable_ssh_remote(self) -> Tuple[bool, str]:
+        """
+        Enable OpenSSH Server on remote Windows PC via WinRM or SSH.
+        Requires either: WinRM enabled (same network/domain) or SSH already working.
+        """
+        ps_script = r"""
+# 1. OpenSSH Server 설치
+$cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
+if ($cap -and $cap.State -ne 'Installed') {
+    Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null
+    "OpenSSH 서버 설치 완료"
+} else {
+    "OpenSSH 서버 이미 설치됨"
+}
+
+# 2. 서비스 시작 및 자동 시작 설정
+Start-Service sshd -ErrorAction SilentlyContinue
+Set-Service -Name sshd -StartupType Automatic
+"sshd 서비스 시작 완료"
+
+# 3. 방화벽 규칙 추가 (포트 22)
+$rule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+if (-not $rule) {
+    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' `
+        -DisplayName 'OpenSSH Server (sshd)' `
+        -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null
+    "방화벽 규칙 추가 완료"
+} else {
+    "방화벽 규칙 이미 존재함"
+}
+
+# 결과 확인
+$svc = Get-Service sshd -ErrorAction SilentlyContinue
+"sshd 상태: $($svc.Status)"
+"""
+        if self.shutdown_method == "ssh":
+            return self._run_ps_via_ssh(ps_script)
+        else:
+            return self._run_ps_via_wmi(ps_script)
+
     def enable_wol_remote(self) -> Tuple[bool, str]:
         """
         Remotely enable WOL on Windows network adapters via PowerShell (WMI/SSH).
