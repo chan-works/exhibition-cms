@@ -48,9 +48,7 @@ english.AppIsRunning=Exhibition CMS is running. Please close it and try again.
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "dist\ExhibitionCMS\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; 단일 exe 방식일 경우:
-; Source: "dist\ExhibitionCMS.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\ExhibitionCMS.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
