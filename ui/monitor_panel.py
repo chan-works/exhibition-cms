@@ -43,6 +43,7 @@ class ServerLaunchWorker(QObject):
     """
     log = Signal(str)
     finished = Signal()
+    need_installer = Signal(dict)   # emitted when both WinRM and SSH fail
 
     def __init__(self, devices):
         super().__init__()
@@ -85,9 +86,11 @@ class ServerLaunchWorker(QObject):
                 self.log.emit("   ✗ SSH 사용자 미설정 — 디바이스 편집에서 SSH 사용자/비밀번호 입력 필요")
 
             self.log.emit(
-                "   ℹ  자동 시작 불가 → '설치파일 생성' 버튼으로 .bat 파일을 만들어\n"
-                "      대상 PC에서 한 번 실행하면 이후 자동으로 작동합니다."
+                "   ℹ  WinRM/SSH 모두 차단됨\n"
+                "      → 아래 [설치파일 생성] 버튼을 클릭하면 .bat 파일이 만들어집니다.\n"
+                "        대상 PC에서 한 번 실행하면 이후 자동으로 작동합니다."
             )
+            self.need_installer.emit(dev)
 
         self.log.emit("\n완료.")
         self.finished.emit()
@@ -665,6 +668,35 @@ class MonitorPanel(QWidget):
             msg += f"\n\n오류:\n" + "\n".join(errors)
         QMessageBox.information(self, "설치파일 생성 완료", msg)
 
+    def _save_one_installer(self, device: dict):
+        """Save a .bat installer for a single device and open its folder."""
+        desktop = Path.home() / "Desktop"
+        if not desktop.exists():
+            desktop = Path.home()
+        out_dir = desktop / "ExhibitionCMS-설치파일"
+        out_dir.mkdir(exist_ok=True)
+        safe_name = device["name"].replace(" ", "_").replace("/", "-")
+        bat_path = out_dir / f"설치_{safe_name}.bat"
+        try:
+            bat_path.write_text(generate_setup_bat(device), encoding="utf-8-sig")
+        except Exception as e:
+            QMessageBox.critical(self, "오류", str(e))
+            return
+        if platform.system() == "Windows":
+            subprocess.Popen(["explorer", str(out_dir)])
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", str(out_dir)])
+        else:
+            subprocess.Popen(["xdg-open", str(out_dir)])
+        QMessageBox.information(
+            self, "설치파일 생성 완료",
+            f"파일 저장: {bat_path}\n\n"
+            "사용 방법:\n"
+            "  1. 위 파일을 USB로 대상 PC에 복사\n"
+            "  2. 마우스 오른쪽 클릭 → '관리자 권한으로 실행'\n"
+            "  3. 완료되면 CMS에서 화면이 보입니다"
+        )
+
     def _start_server_for_tile(self, device: dict):
         """Called when user clicks '서버 시작' on a tile."""
         dev_id = str(device["id"])
@@ -677,18 +709,33 @@ class MonitorPanel(QWidget):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
 
+        _failed = []
+
         def on_log(msg):
-            # If success signal in log, refresh tile immediately
             if "✓" in msg and dev_id in self._tiles:
                 QTimer.singleShot(2000, lambda: self._fetch_one(dev_id))
+
+        def on_need_installer(dev):
+            _failed.append(dev)
 
         def on_finished():
             thread.quit()
             if tile:
                 tile.start_btn.setEnabled(True)
                 tile.start_btn.setText("서버 시작")
+            if _failed:
+                reply = QMessageBox.question(
+                    self, "자동 시작 실패",
+                    f"[{device['name']}] WinRM/SSH 연결 불가\n\n"
+                    "설치파일(.bat)을 생성해서 대상 PC에서 한 번 실행하면\n"
+                    "이후 자동으로 동작합니다.\n\n지금 생성하시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._save_one_installer(device)
 
         worker.log.connect(on_log)
+        worker.need_installer.connect(on_need_installer)
         worker.finished.connect(on_finished)
         thread.start()
 
@@ -747,16 +794,31 @@ class MonitorPanel(QWidget):
         def append_log(msg):
             log_box.append(msg)
 
+        failed_devices = []
+
+        def on_need_installer(dev):
+            failed_devices.append(dev)
+            # Show install button for this device
+            btn = QPushButton(f"설치파일 생성: {dev['name']}")
+            btn.setStyleSheet(
+                "QPushButton{background:#2e7d32;color:white;border:none;"
+                "border-radius:4px;padding:4px 10px;margin:2px;}"
+                "QPushButton:hover{background:#388e3c;}"
+            )
+            btn.clicked.connect(lambda _, d=dev: self._save_one_installer(d))
+            layout.insertWidget(layout.count() - 1, btn)
+
         worker = ServerLaunchWorker(devices)
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.log.connect(append_log)
+        worker.need_installer.connect(on_need_installer)
 
         def on_finished():
             thread.quit()
             self.auto_start_btn.setEnabled(True)
-            self.auto_start_btn.setText("서버 자동 시작 (SSH)")
+            self.auto_start_btn.setText("SSH 자동 시작")
 
         worker.finished.connect(on_finished)
         thread.start()
