@@ -298,11 +298,30 @@ class DeviceDialog(QDialog):
             self.zone_combo.addItem(z["name"], z["id"])
         form.addRow("구역", self.zone_combo)
 
+        type_row = QHBoxLayout()
         self.type_combo = QComboBox()
         for key, label in DEVICE_TYPES.items():
             self.type_combo.addItem(label, key)
         self.type_combo.currentIndexChanged.connect(self._on_type_change)
-        form.addRow("타입 *", self.type_combo)
+        self.type_combo.currentIndexChanged.connect(self._update_wol_btn)
+        type_row.addWidget(self.type_combo)
+
+        self.scan_net_btn = QPushButton("🔍 네트워크 자동 감지")
+        self.scan_net_btn.setFixedHeight(32)
+        self.scan_net_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1a4a80;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 0 10px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background-color: #2a5a90; }
+        """)
+        self.scan_net_btn.clicked.connect(self._open_network_scan)
+        type_row.addWidget(self.scan_net_btn)
+        form.addRow("타입 *", type_row)
 
         self.enabled_check = QCheckBox("활성화")
         self.enabled_check.setChecked(True)
@@ -330,6 +349,12 @@ class DeviceDialog(QDialog):
         self.test_btn.clicked.connect(self._test_connection)
         btn_layout.addWidget(self.test_btn)
 
+        self.wol_diag_btn = QPushButton("WOL 진단")
+        self.wol_diag_btn.setToolTip("WOL 전송 방법 전체를 시도하고 결과를 확인합니다")
+        self.wol_diag_btn.clicked.connect(self._wol_diagnose)
+        self.wol_diag_btn.setVisible(False)
+        btn_layout.addWidget(self.wol_diag_btn)
+
         cancel_btn = QPushButton("취소")
         cancel_btn.clicked.connect(self.reject)
         save_btn = QPushButton("저장")
@@ -350,6 +375,29 @@ class DeviceDialog(QDialog):
         if zone_idx >= 0:
             self.zone_combo.setCurrentIndex(zone_idx)
         self.enabled_check.setChecked(bool(device.get("is_enabled", 1)))
+
+    def _update_wol_btn(self):
+        dtype = self.type_combo.currentData()
+        self.wol_diag_btn.setVisible(dtype == "computer")
+
+    def _open_network_scan(self):
+        from ui.network_scan_dialog import NetworkScanDialog
+        dtype = self.type_combo.currentData()
+        filter_map = {"pjlink": "pjlink", "computer": "computer"}
+        dlg = NetworkScanDialog(self, device_type_filter=filter_map.get(dtype))
+        dlg.device_selected.connect(self._on_device_selected)
+        dlg.exec()
+
+    def _on_device_selected(self, dtype, ip, mac):
+        if self.config_widget:
+            if hasattr(self.config_widget, "host"):
+                self.config_widget.host.setText(ip)
+            if hasattr(self.config_widget, "mac") and mac:
+                self.config_widget.mac.setText(mac)
+        # Switch type if needed
+        idx = self.type_combo.findData(dtype)
+        if idx >= 0:
+            self.type_combo.setCurrentIndex(idx)
 
     def _on_type_change(self):
         dtype = self.type_combo.currentData()
@@ -412,6 +460,20 @@ class DeviceDialog(QDialog):
             QMessageBox.information(self, "연결 성공", msg)
         else:
             QMessageBox.critical(self, "연결 실패", msg)
+
+    def _wol_diagnose(self):
+        if not self.config_widget:
+            return
+        cfg = self.config_widget.get_config()
+        from controllers.computer_controller import ComputerController
+        ctrl = ComputerController(
+            host=cfg.get("host", ""),
+            mac=cfg.get("mac", ""),
+            broadcast=cfg.get("broadcast", "255.255.255.255"),
+            wol_port=int(cfg.get("wol_port", 9)),
+        )
+        result = ctrl.wol_diagnose()
+        QMessageBox.information(self, "WOL 진단 결과", result)
 
     def _save(self):
         name = self.name_input.text().strip()
