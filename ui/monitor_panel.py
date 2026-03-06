@@ -529,14 +529,21 @@ class MonitorPanel(QWidget):
 
     def _refresh_all(self):
         for dev_id, tile in self._tiles.items():
+            # Skip if previous fetch for this device is still running
+            prev = self._fetchers.get(dev_id)
+            if prev and prev[0].isRunning():
+                continue
+
             thread = QThread()
             fetcher = ScreenFetcher(dev_id, tile.url)
             fetcher.moveToThread(thread)
             thread.started.connect(fetcher.fetch)
             fetcher.fetched.connect(self._on_fetched)
             fetcher.failed.connect(self._on_failed)
-            fetcher.fetched.connect(lambda *_: thread.quit())
-            fetcher.failed.connect(lambda *_: thread.quit())
+            # Use default arg to capture current thread value (fixes closure bug)
+            fetcher.fetched.connect(lambda *_, t=thread: t.quit())
+            fetcher.failed.connect(lambda *_, t=thread: t.quit())
+            thread.finished.connect(thread.deleteLater)
             thread.start()
             self._fetchers[dev_id] = (thread, fetcher)
 

@@ -492,7 +492,6 @@ class DeviceDialog(QDialog):
 
         # ── Fixed bottom button bar ──────────────────────────────────────────
         btn_bar = QFrame()
-        btn_bar.setFixedHeight(56)
         btn_bar.setStyleSheet("""
             QFrame {
                 background-color: #16213e;
@@ -500,56 +499,60 @@ class DeviceDialog(QDialog):
             }
         """)
         btn_bar_layout = QVBoxLayout(btn_bar)
-        btn_bar_layout.setContentsMargins(16, 8, 16, 8)
-        btn_bar_layout.setSpacing(0)
+        btn_bar_layout.setContentsMargins(12, 8, 12, 8)
+        btn_bar_layout.setSpacing(6)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        # Row 1: PC-only action buttons (hidden for non-computer types)
+        self._pc_btn_row = QHBoxLayout()
+        self._pc_btn_row.setSpacing(6)
 
-        # WOL buttons (computer only)
-        self.ssh_enable_btn = QPushButton("SSH 자동 활성화")
-        self.ssh_enable_btn.setFixedHeight(36)
+        self.ssh_enable_btn = QPushButton("SSH 활성화")
+        self.ssh_enable_btn.setFixedHeight(32)
         self.ssh_enable_btn.setToolTip("WinRM으로 원격 PC에 OpenSSH 서버를 자동 설치/활성화합니다")
         self.ssh_enable_btn.clicked.connect(self._ssh_enable_remote)
-        self.ssh_enable_btn.setVisible(False)
-        btn_row.addWidget(self.ssh_enable_btn)
+        self._pc_btn_row.addWidget(self.ssh_enable_btn)
 
         self.wol_diag_btn = QPushButton("WOL 진단")
-        self.wol_diag_btn.setFixedHeight(36)
+        self.wol_diag_btn.setFixedHeight(32)
         self.wol_diag_btn.setToolTip("WOL 전송 방법 전체를 시도하고 결과를 확인합니다")
         self.wol_diag_btn.clicked.connect(self._wol_diagnose)
-        self.wol_diag_btn.setVisible(False)
-        btn_row.addWidget(self.wol_diag_btn)
+        self._pc_btn_row.addWidget(self.wol_diag_btn)
 
         self.wol_enable_btn = QPushButton("WOL 원격 활성화")
-        self.wol_enable_btn.setFixedHeight(36)
+        self.wol_enable_btn.setFixedHeight(32)
         self.wol_enable_btn.setObjectName("success")
         self.wol_enable_btn.setToolTip("PC가 켜진 상태에서 WOL 자동 활성화")
         self.wol_enable_btn.clicked.connect(self._wol_enable_remote)
-        self.wol_enable_btn.setVisible(False)
-        btn_row.addWidget(self.wol_enable_btn)
+        self._pc_btn_row.addWidget(self.wol_enable_btn)
+
+        self._pc_btn_row.addStretch()
+        btn_bar_layout.addLayout(self._pc_btn_row)
+
+        # Row 2: Common buttons
+        common_row = QHBoxLayout()
+        common_row.setSpacing(6)
 
         self.test_btn = QPushButton("연결 테스트")
-        self.test_btn.setFixedHeight(36)
+        self.test_btn.setFixedHeight(32)
         self.test_btn.clicked.connect(self._test_connection)
-        btn_row.addWidget(self.test_btn)
+        common_row.addWidget(self.test_btn)
 
-        btn_row.addStretch()
+        common_row.addStretch()
 
         cancel_btn = QPushButton("취소")
-        cancel_btn.setFixedHeight(36)
-        cancel_btn.setFixedWidth(72)
+        cancel_btn.setFixedHeight(32)
+        cancel_btn.setMinimumWidth(64)
         cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
+        common_row.addWidget(cancel_btn)
 
         save_btn = QPushButton("저장")
         save_btn.setObjectName("primary")
-        save_btn.setFixedHeight(36)
-        save_btn.setFixedWidth(72)
+        save_btn.setFixedHeight(32)
+        save_btn.setMinimumWidth(64)
         save_btn.clicked.connect(self._save)
-        btn_row.addWidget(save_btn)
+        common_row.addWidget(save_btn)
 
-        btn_bar_layout.addLayout(btn_row)
+        btn_bar_layout.addLayout(common_row)
         root.addWidget(btn_bar)
 
         self._on_type_change()
@@ -570,6 +573,11 @@ class DeviceDialog(QDialog):
         self.ssh_enable_btn.setVisible(is_computer)
         self.wol_diag_btn.setVisible(is_computer)
         self.wol_enable_btn.setVisible(is_computer)
+        # Hide entire first row when not a computer type
+        for i in range(self._pc_btn_row.count()):
+            item = self._pc_btn_row.itemAt(i)
+            if item and item.widget():
+                item.widget().setVisible(is_computer)
 
     def _open_network_scan(self):
         from ui.network_scan_dialog import NetworkScanDialog
