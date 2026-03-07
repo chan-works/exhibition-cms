@@ -176,6 +176,29 @@ class ComputerConfigWidget(QWidget):
         layout.addRow("SSH 사용자", self.ssh_user)
         layout.addRow("SSH 비밀번호", self.ssh_password)
 
+        # ── iptime 공유기 WOL 설정 ──────────────────────────────────────────
+        sep = QLabel("── iptime 공유기 WOL (선택) ──────────────────")
+        sep.setStyleSheet("color:#606070; font-size:11px; margin-top:6px;")
+        layout.addRow(sep)
+
+        self.router_ip = QLineEdit(cfg.get("router_ip", ""))
+        self.router_ip.setPlaceholderText("192.168.0.1")
+        self.router_ip.setToolTip(
+            "iptime 공유기 관리 IP\n"
+            "설정하면 UDP 브로드캐스트와 함께 공유기 HTTP API로도 WOL을 전송합니다.\n"
+            "같은 공유기 LAN에 대상 PC가 있을 때 가장 신뢰도가 높습니다."
+        )
+        layout.addRow("공유기 IP", self.router_ip)
+
+        self.router_user = QLineEdit(cfg.get("router_user", "admin"))
+        self.router_user.setPlaceholderText("admin")
+        layout.addRow("공유기 ID", self.router_user)
+
+        self.router_password = QLineEdit(cfg.get("router_password", "admin"))
+        self.router_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.router_password.setPlaceholderText("admin")
+        layout.addRow("공유기 비밀번호", self.router_password)
+
     def _auto_fill_broadcast(self):
         ip = self.host.text().strip()
         if not ip or not ip[0].isdigit():
@@ -217,6 +240,9 @@ class ComputerConfigWidget(QWidget):
             "shutdown_method": self.shutdown_method.currentData(),
             "ssh_user": self.ssh_user.text().strip(),
             "ssh_password": self.ssh_password.text(),
+            "router_ip": self.router_ip.text().strip(),
+            "router_user": self.router_user.text().strip() or "admin",
+            "router_password": self.router_password.text(),
         }
 
     def validate(self):
@@ -671,6 +697,9 @@ class DeviceDialog(QDialog):
             mac=cfg.get("mac", ""),
             broadcast=cfg.get("broadcast", "255.255.255.255"),
             wol_port=int(cfg.get("wol_port", 9)),
+            router_ip=cfg.get("router_ip", ""),
+            router_user=cfg.get("router_user", "admin"),
+            router_password=cfg.get("router_password", "admin"),
         )
         result = ctrl.wol_diagnose()
         QMessageBox.information(self, "WOL 진단 결과", result)

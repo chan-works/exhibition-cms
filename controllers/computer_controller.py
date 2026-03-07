@@ -88,10 +88,60 @@ def send_wol_all_methods(mac: str, host: str, broadcast: str = "255.255.255.255"
         for port in (9, 7):
             try:
                 send_magic_packet(mac, target=target, port=port)
-                results.append(f"✓ {target}:{port}")
+                results.append(f"✓ UDP {target}:{port}")
             except Exception as e:
-                results.append(f"✗ {target}:{port} → {e}")
+                results.append(f"✗ UDP {target}:{port} → {e}")
     return results
+
+
+def send_wol_via_iptime(router_ip: str, mac: str,
+                         username: str = "admin",
+                         password: str = "admin") -> Tuple[bool, str]:
+    """
+    iptime 공유기 HTTP API를 통해 WOL 매직패킷을 전송합니다.
+    공유기가 대상 PC와 같은 LAN에 있으면 서브넷 브로드캐스트 문제 없이 동작합니다.
+
+    iptime 펌웨어 API:
+      1. POST /sess-bin/timepro.cgi  (로그인 → 세션 쿠키)
+      2. POST /sess-bin/timepro.cgi  (WOL 전송)
+    """
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+
+    # MAC을 iptime 형식(대시 구분)으로 변환
+    clean = mac.replace(":", "").replace("-", "").replace(".", "").upper()
+    if len(clean) != 12:
+        return False, f"잘못된 MAC 주소: {mac}"
+    mac_dash = "-".join(clean[i:i+2] for i in range(0, 12, 2))
+
+    base = f"http://{router_ip}"
+    cj  = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    try:
+        # 1단계: 로그인
+        login_body = urllib.parse.urlencode({
+            "tmenu":    "main",
+            "act":      "session_popup",
+            "username": username,
+            "passwd":   password,
+        }).encode()
+        opener.open(f"{base}/sess-bin/timepro.cgi", login_body, timeout=5)
+
+        # 2단계: WOL 전송
+        wol_body = urllib.parse.urlencode({
+            "tmenu": "expertconf",
+            "smenu": "wolconf",
+            "act":   "wakeup",
+            "mac":   mac_dash,
+        }).encode()
+        resp = opener.open(f"{base}/sess-bin/timepro.cgi", wol_body, timeout=5)
+        resp.read()
+        return True, f"iptime WOL 전송 완료 ({router_ip} → {mac_dash})"
+    except Exception as e:
+        return False, f"iptime WOL 실패: {e}"
 
 
 class ComputerController:
@@ -99,12 +149,16 @@ class ComputerController:
 
     def __init__(self, host: str, mac: str = "", broadcast: str = "255.255.255.255",
                  wol_port: int = 9, ssh_user: str = "", ssh_password: str = "",
-                 shutdown_method: str = "wmi"):
+                 shutdown_method: str = "wmi",
+                 router_ip: str = "", router_user: str = "admin",
+                 router_password: str = "admin"):
         """
         shutdown_method:
           'wmi'   – Windows Net Use / shutdown command (same AD/workgroup)
           'ssh'   – SSH shutdown (requires paramiko)
           'local' – local machine
+
+        router_ip: iptime 공유기 IP (설정 시 HTTP API로도 WOL 전송)
         """
         self.host = host
         self.mac = mac
@@ -113,14 +167,30 @@ class ComputerController:
         self.ssh_user = ssh_user
         self.ssh_password = ssh_password
         self.shutdown_method = shutdown_method
+        self.router_ip = router_ip
+        self.router_user = router_user
+        self.router_password = router_password
 
     def power_on(self) -> Tuple[bool, str]:
-        """Wake-on-LAN — sends magic packet 3 times for reliability."""
+        """Wake-on-LAN — UDP 브로드캐스트 3회 + iptime HTTP API (설정된 경우)."""
         if not self.mac:
             return False, "MAC 주소가 설정되지 않았습니다.\n→ 디바이스 설정에서 MAC 주소를 입력하세요."
+
         import time
         all_results = []
         success = False
+
+        # 1) iptime 공유기 HTTP API (라우터 IP가 설정된 경우 — 가장 신뢰도 높음)
+        if self.router_ip:
+            ok, msg = send_wol_via_iptime(
+                self.router_ip, self.mac,
+                self.router_user, self.router_password
+            )
+            all_results.append(f"{'✓' if ok else '✗'} {msg}")
+            if ok:
+                success = True
+
+        # 2) UDP 매직패킷 (브로드캐스트 / 서브넷 / 유니캐스트) × 3회
         for attempt in range(3):
             if attempt > 0:
                 time.sleep(0.5)
@@ -130,11 +200,19 @@ class ComputerController:
                     success = True
                 all_results.extend(results)
             except Exception as e:
-                all_results.append(f"✗ 시도 {attempt+1}: {e}")
-        detail = "\n".join(dict.fromkeys(all_results))  # deduplicate
+                all_results.append(f"✗ UDP 시도 {attempt+1}: {e}")
+
+        detail = "\n".join(dict.fromkeys(all_results))
         if success:
-            return True, f"WOL 패킷 전송 완료 (3회)\n{detail}"
-        return False, f"WOL 실패\n{detail}\n\n확인 사항:\n1. BIOS에서 Wake-on-LAN 활성화\n2. 네트워크 어댑터 → 전원 관리 → '이 장치로 컴퓨터를 켤 수 있음' 체크\n3. PC가 완전 종료 상태여야 함 (절전 X)"
+            return True, f"WOL 패킷 전송 완료\n{detail}"
+        return False, (
+            f"WOL 실패\n{detail}\n\n"
+            "확인 사항:\n"
+            "1. BIOS에서 Wake-on-LAN 활성화\n"
+            "2. 네트워크 어댑터 → 전원 관리 → '이 장치로 컴퓨터를 켤 수 있음' 체크\n"
+            "3. PC가 완전 종료 상태여야 함 (절전 X)\n"
+            "4. 디바이스 설정에서 iptime 공유기 IP를 입력하면 성공률이 올라갑니다"
+        )
 
     def wol_diagnose(self) -> str:
         """Send WOL via all methods and return detailed result string."""
@@ -145,9 +223,26 @@ class ComputerController:
         except ValueError as e:
             return str(e)
 
-        lines = [f"MAC: {mac_norm}", f"대상 IP: {self.host or '미설정'}", ""]
-        results = send_wol_all_methods(mac_norm, self.host, self.broadcast)
-        lines += results
+        lines = [
+            f"MAC    : {mac_norm}",
+            f"대상 IP : {self.host or '미설정'}",
+            f"공유기  : {self.router_ip or '미설정'}",
+            "",
+        ]
+
+        # iptime HTTP API
+        if self.router_ip:
+            lines.append("[ iptime HTTP API ]")
+            ok, msg = send_wol_via_iptime(
+                self.router_ip, mac_norm,
+                self.router_user, self.router_password
+            )
+            lines.append(f"  {'✓' if ok else '✗'} {msg}")
+            lines.append("")
+
+        # UDP 브로드캐스트
+        lines.append("[ UDP 매직패킷 ]")
+        lines += send_wol_all_methods(mac_norm, self.host, self.broadcast)
         lines += [
             "",
             "※ WOL이 작동하지 않는 경우:",
@@ -155,6 +250,7 @@ class ComputerController:
             "  2. Windows: 장치관리자 → 네트워크 어댑터",
             "     → 속성 → 전원관리 → '이 장치로 컴퓨터를 켤 수 있음' 체크",
             "  3. 대상 PC가 완전 종료 상태여야 함 (재시작 후 종료 필요)",
+            "  4. 디바이스 설정에서 iptime 공유기 IP를 입력하면 성공률 향상",
         ]
         return "\n".join(lines)
 
