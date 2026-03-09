@@ -1,39 +1,49 @@
-name: Build & Release Windows EXE
+name: Build & Release (Windows EXE)
 
 on:
-  release:
-    types: [created]
-
-permissions:
-  contents: write
+  push:
+    tags:
+      - 'v*.*.*'
 
 jobs:
   build-windows:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout
+      - name: 소스 체크아웃
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Python 설치
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install dependencies
+      - name: 의존성 설치
         run: |
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build EXE
-        run: pyinstaller build.spec --clean
+      - name: EXE 빌드
+        run: pyinstaller build.spec --clean --noconfirm
 
-      - name: Rename EXE with version
-        run: mv dist/ExhibitionCMS.exe dist/ExhibitionCMS-${{ github.ref_name }}.exe
+      - name: EXE 확인
+        run: dir dist\
 
-      - name: Upload EXE to Release
+      - name: GitHub Release에 EXE 업로드
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ExhibitionCMS-${{ github.ref_name }}.exe
+          files: dist/ExhibitionCMS.exe
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            ## 다운로드
+            **ExhibitionCMS.exe** 를 다운받아 실행하세요.
+
+            ### 최초 실행 시
+            - 관리자 권한으로 실행 권장 (방화벽 자동 설정)
+            - 기본 계정: `admin` / `admin123`
+
+            ### 웹 접속 (맥북 등)
+            실행 후 같은 네트워크에서 `http://<이-PC-IP>:8080` 접속
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
