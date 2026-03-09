@@ -12,8 +12,6 @@
   <a href="{{ url_for('calendar_page') }}" class="btn btn-sm" style="background:var(--bg2);border:1px solid var(--border);">이번 달</a>
 </div>
 
-{% set sched_map = {} %}
-{% for s in schedules %}{% if sched_map.update({s.schedule_date: sched_map.get(s.schedule_date,[])+[s]}) %}{% endif %}{% endfor %}
 
 <div class="cal-grid">
   {% for d in ['월','화','수','목','금','토','일'] %}

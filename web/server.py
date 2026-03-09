@@ -175,9 +175,13 @@ def calendar_page():
         {"empty": False, "day": d, "weekday": (first_weekday + d - 1) % 7}
         for d in range(1, days_in_month + 1)
     ]
+    sched_map = {}
+    for s in schedules:
+        key = s["schedule_date"]
+        sched_map.setdefault(key, []).append(s)
     return render_template("calendar.html", active="calendar",
         schedules=schedules, zones=zones, year=year, month=month,
-        today=today.isoformat(), cal_days=cal_days)
+        today=today.isoformat(), cal_days=cal_days, sched_map=sched_map)
 
 
 @app.route("/recurring")
