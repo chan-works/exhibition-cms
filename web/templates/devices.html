@@ -113,15 +113,19 @@
 
 {% block scripts %}
 <script>
-// ── 전체 PC 핑 ──────────────────────────────────────────────────────────────
-const computerDevices = {{ devices | tojson }};
-
-function pingAll() {
-  computerDevices.forEach(dev => {
-    if (dev.device_type === 'computer' && dev.config && dev.config.host) {
-      pingOne(dev.id, dev.config.host);
+// ── 전체 핑 ──────────────────────────────────────────────────────────────────
+async function pingAll() {
+  try {
+    const res = await fetch('/api/devices/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const [id, online] of Object.entries(data.results)) {
+      updateStatus(parseInt(id), online);
     }
-  });
+    showToast('전체 핑 완료', 'ok');
+  } catch (e) {
+    showToast('핑 실패', 'err');
+  }
 }
 
 async function pingOne(devId, ip, btn) {
@@ -200,7 +204,19 @@ document.getElementById('mac-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeMacModal();
 });
 
-// 페이지 로드 시 자동 핑
-document.addEventListener('DOMContentLoaded', pingAll);
+// 페이지 로드 시 자동 핑 + 30초 자동 갱신
+document.addEventListener('DOMContentLoaded', () => {
+  pingAll();
+  setInterval(async () => {
+    try {
+      const res = await fetch('/api/devices/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const [id, online] of Object.entries(data.results)) {
+        updateStatus(parseInt(id), online);
+      }
+    } catch (e) {}
+  }, 30000);
+});
 </script>
 {% endblock %}

@@ -118,32 +118,25 @@
 
 {% block scripts %}
 <script>
-// 페이지 로드 시 computer 타입 디바이스 핑 확인
-document.addEventListener('DOMContentLoaded', () => {
-  const computerDevices = {{ devices_by_zone | tojson }};
-  // Flatten all devices
-  const all = [];
-  for (const [zid, devs] of Object.entries(computerDevices)) {
-    for (const d of devs) {
-      if (d.device_type === 'computer' && d.config && d.config.host) {
-        all.push(d);
-      }
-    }
-  }
-  // Ping each
-  all.forEach(dev => pingDevice(dev.id, dev.config.host));
-});
-
-async function pingDevice(devId, ip) {
+async function refreshAllStatus() {
   try {
-    const res = await apiPost('/api/ping', { ip });
-    const dot = document.getElementById(`status-${devId}`);
-    if (dot) {
-      dot.classList.remove('status-unknown', 'status-online', 'status-offline');
-      dot.classList.add(res.online ? 'status-online' : 'status-offline');
-      dot.title = res.online ? '온라인' : '오프라인';
+    const res = await fetch('/api/devices/status');
+    if (!res.ok) return;
+    const data = await res.json();
+    for (const [id, online] of Object.entries(data.results)) {
+      const dot = document.getElementById(`status-${id}`);
+      if (dot) {
+        dot.classList.remove('status-unknown', 'status-online', 'status-offline');
+        dot.classList.add(online ? 'status-online' : 'status-offline');
+        dot.title = online ? '온라인' : '오프라인';
+      }
     }
   } catch (e) {}
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  refreshAllStatus();
+  setInterval(refreshAllStatus, 30000);
+});
 </script>
 {% endblock %}

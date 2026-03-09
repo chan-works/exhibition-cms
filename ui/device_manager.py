@@ -6,7 +6,48 @@ from PySide6.QtWidgets import (
     QSpinBox, QTextEdit, QFrame, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal, QThread, QObject, QTimer
+from PySide6.QtGui import QColor, QPainter, QBrush
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+class StatusDotWidget(QWidget):
+    """컬러 LED 인디케이터 + 상태 텍스트"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 8, 0)
+        layout.setSpacing(6)
+        self._dot = QLabel()
+        self._dot.setFixedSize(12, 12)
+        self._dot.setStyleSheet(
+            "border-radius: 6px; background: #555;"
+        )
+        self._text = QLabel("-")
+        self._text.setStyleSheet("color: #808090; font-size: 12px;")
+        layout.addWidget(self._dot)
+        layout.addWidget(self._text)
+        layout.addStretch()
+
+    def set_online(self, online: bool):
+        if online:
+            self._dot.setStyleSheet(
+                "border-radius: 6px; background: #27ae60;"
+                "border: 1px solid #2ecc71;"
+            )
+            self._text.setText("온라인")
+            self._text.setStyleSheet("color: #27ae60; font-size: 12px; font-weight: bold;")
+        else:
+            self._dot.setStyleSheet(
+                "border-radius: 6px; background: #c0392b;"
+                "border: 1px solid #e74c3c;"
+            )
+            self._text.setText("오프라인")
+            self._text.setStyleSheet("color: #c0392b; font-size: 12px;")
+
+    def set_unknown(self):
+        self._dot.setStyleSheet("border-radius: 6px; background: #555;")
+        self._text.setText("-")
+        self._text.setStyleSheet("color: #808090; font-size: 12px;")
 
 class PingWorker(QObject):
     ping_result = Signal(int, bool)   # device_id, is_online
@@ -814,6 +855,7 @@ class DeviceManager(QWidget):
         self.current_user = current_user
         self.scheduler = scheduler
         self._ping_results = {}       # device_id → bool
+        self._status_widgets = {}     # device_id → StatusDotWidget
         self._ping_thread = None
         self._ping_worker = None
         self._ip_timer = QTimer(self)
@@ -821,6 +863,18 @@ class DeviceManager(QWidget):
         self._ip_timer.timeout.connect(self._run_ping_check)
         self._build_ui()
         self.refresh()
+        # 자동으로 핑 시작
+        self._ip_timer.start()
+        self.ip_check_btn.setText("IP 자동 확인 중지")
+        self.ip_check_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #8b2222; color: white;
+                border: none; border-radius: 4px;
+                padding: 0 12px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #a03030; }
+        """)
+        self._run_ping_check()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -871,6 +925,7 @@ class DeviceManager(QWidget):
         layout.addWidget(self.table)
 
     def refresh(self):
+        self._status_widgets.clear()
         devices = self.db.get_all_devices()
         self.table.setRowCount(len(devices))
         for i, dev in enumerate(devices):
@@ -886,18 +941,14 @@ class DeviceManager(QWidget):
             self.table.setItem(i, 2, QTableWidgetItem(dev.get("zone_name") or "-"))
             host_str = cfg.get("host", cfg.get("port", "-")) if isinstance(cfg, dict) else "-"
             self.table.setItem(i, 3, QTableWidgetItem(str(host_str)))
-            is_enabled = bool(dev.get("is_enabled", 1))
             dev_id = dev["id"]
-            if dev.get("device_type") == "computer" and dev_id in self._ping_results:
-                online = self._ping_results[dev_id]
-                text = ("● 온라인" if online else "○ 오프라인") + (" (활성)" if is_enabled else " (비활성)")
-                color = Qt.GlobalColor.green if online else Qt.GlobalColor.red
+            status_widget = StatusDotWidget()
+            if dev_id in self._ping_results:
+                status_widget.set_online(self._ping_results[dev_id])
             else:
-                text = "활성" if is_enabled else "비활성"
-                color = Qt.GlobalColor.green if is_enabled else Qt.GlobalColor.red
-            status_item = QTableWidgetItem(text)
-            status_item.setForeground(color)
-            self.table.setItem(i, 4, status_item)
+                status_widget.set_unknown()
+            self._status_widgets[dev_id] = status_widget
+            self.table.setCellWidget(i, 4, status_widget)
 
             btn_widget = QWidget()
             btn_layout = QHBoxLayout(btn_widget)
@@ -971,19 +1022,9 @@ class DeviceManager(QWidget):
 
     def _on_ping_result(self, dev_id, is_online):
         self._ping_results[dev_id] = is_online
-        for row in range(self.table.rowCount()):
-            name_item = self.table.item(row, 0)
-            if name_item is None:
-                continue
-            meta = name_item.data(Qt.ItemDataRole.UserRole)
-            if isinstance(meta, dict) and meta.get("id") == dev_id:
-                is_enabled = meta.get("is_enabled", True)
-                text = ("● 온라인" if is_online else "○ 오프라인") + (" (활성)" if is_enabled else " (비활성)")
-                color = Qt.GlobalColor.green if is_online else Qt.GlobalColor.red
-                new_status = QTableWidgetItem(text)
-                new_status.setForeground(color)
-                self.table.setItem(row, 4, new_status)
-                break
+        widget = self._status_widgets.get(dev_id)
+        if widget:
+            widget.set_online(is_online)
 
     def _open_screen_viewer(self, device):
         from ui.screen_viewer import ScreenViewerDialog

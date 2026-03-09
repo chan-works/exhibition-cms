@@ -249,14 +249,25 @@ a:hover { text-decoration: underline; }
 
 .status-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
+  transition: background 0.3s;
 }
-.status-online  { background: var(--green); }
+.status-online  {
+  background: var(--green);
+  box-shadow: 0 0 0 0 rgba(39,174,96,0.7);
+  animation: pulse-green 2s infinite;
+}
 .status-offline { background: var(--red); }
 .status-unknown { background: var(--text-dim); }
+
+@keyframes pulse-green {
+  0%   { box-shadow: 0 0 0 0 rgba(39,174,96,0.6); }
+  70%  { box-shadow: 0 0 0 6px rgba(39,174,96,0); }
+  100% { box-shadow: 0 0 0 0 rgba(39,174,96,0); }
+}
 
 /* ── Table ──────────────────────────────────────────────────────────────────── */
 .table-wrap {

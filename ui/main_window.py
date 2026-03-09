@@ -170,6 +170,38 @@ class MainWindow(QMainWindow):
         layout.addStretch()
         layout.addWidget(self.badge_label)
 
+        # 자동 시작 토글 (Windows 전용)
+        try:
+            from utils.startup import is_startup_enabled
+            startup_on = is_startup_enabled()
+        except Exception:
+            startup_on = False
+
+        self.startup_btn = QPushButton(
+            "✅  시작 시 자동 실행" if startup_on else "☐  시작 시 자동 실행"
+        )
+        self.startup_btn.setFixedHeight(36)
+        self.startup_btn.setCheckable(True)
+        self.startup_btn.setChecked(startup_on)
+        self.startup_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #808090;
+                border: 1px solid #303050;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 11px;
+                text-align: left;
+            }
+            QPushButton:hover { color: #c0d0e0; border-color: #505070; }
+            QPushButton:checked {
+                color: #27ae60;
+                border-color: #27ae60;
+            }
+        """)
+        self.startup_btn.clicked.connect(self._toggle_startup)
+        layout.addWidget(self.startup_btn)
+
         # Logout
         logout_btn = QPushButton("⏻  로그아웃")
         logout_btn.setFixedHeight(40)
@@ -191,6 +223,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(logout_btn)
 
         return sidebar
+
+    def _toggle_startup(self):
+        try:
+            from utils.startup import enable_startup, disable_startup, is_startup_enabled
+            if self.startup_btn.isChecked():
+                ok = enable_startup()
+                if ok:
+                    self.startup_btn.setText("✅  시작 시 자동 실행")
+                    QMessageBox.information(self, "자동 시작", "컴퓨터 켜질 때 자동으로 실행됩니다.")
+                else:
+                    self.startup_btn.setChecked(False)
+                    QMessageBox.warning(self, "오류", "자동 시작 등록에 실패했습니다.")
+            else:
+                ok = disable_startup()
+                if ok:
+                    self.startup_btn.setText("☐  시작 시 자동 실행")
+                else:
+                    self.startup_btn.setChecked(True)
+                    QMessageBox.warning(self, "오류", "자동 시작 해제에 실패했습니다.")
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"Windows 전용 기능입니다.\n{e}")
+            self.startup_btn.setChecked(False)
 
     def _access_denied_page(self):
         page = QWidget()

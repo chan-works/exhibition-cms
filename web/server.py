@@ -458,6 +458,39 @@ def ping_host():
     return jsonify(online=online, ip=ip)
 
 
+@app.route("/api/devices/status")
+@login_required
+def devices_status():
+    """모든 IP 기반 디바이스의 온라인 여부를 병렬로 확인합니다."""
+    from controllers.network_scanner import ping
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    devices = _db.get_all_devices()
+    targets = []
+    for d in devices:
+        cfg = d.get("config") or {}
+        host = cfg.get("host", "").strip() if isinstance(cfg, dict) else ""
+        if host:
+            targets.append({"id": d["id"], "host": host})
+
+    results = {}
+
+    def check(t):
+        return t["id"], ping(t["host"], timeout=1.5)
+
+    if targets:
+        with ThreadPoolExecutor(max_workers=min(20, len(targets))) as ex:
+            futures = {ex.submit(check, t): t for t in targets}
+            for future in as_completed(futures):
+                try:
+                    dev_id, online = future.result()
+                    results[dev_id] = online
+                except Exception:
+                    pass
+
+    return jsonify(results={str(k): v for k, v in results.items()})
+
+
 @app.route("/api/status")
 @login_required
 def api_status():
