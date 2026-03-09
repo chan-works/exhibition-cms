@@ -13,24 +13,13 @@
   <nav class="sidebar">
     <div class="sidebar-logo">Exhibition<br>CMS</div>
     <ul class="nav-list">
-      <li>
-        <a href="{{ url_for('dashboard') }}"
-           class="{% if active == 'dashboard' %}active{% endif %}">
-          📋&nbsp; 대시보드
-        </a>
-      </li>
-      <li>
-        <a href="{{ url_for('devices_page') }}"
-           class="{% if active == 'devices' %}active{% endif %}">
-          ⚙&nbsp; 디바이스
-        </a>
-      </li>
-      <li>
-        <a href="{{ url_for('schedules_page') }}"
-           class="{% if active == 'schedules' %}active{% endif %}">
-          📅&nbsp; 스케줄
-        </a>
-      </li>
+      <li><a href="{{ url_for('dashboard') }}"     class="{% if active == 'dashboard' %}active{% endif %}">📋&nbsp; 대시보드</a></li>
+      <li><a href="{{ url_for('calendar_page') }}" class="{% if active == 'calendar' %}active{% endif %}">📅&nbsp; 캘린더</a></li>
+      <li><a href="{{ url_for('recurring_page') }}"class="{% if active == 'recurring' %}active{% endif %}">🔁&nbsp; 정기스케줄</a></li>
+      <li><a href="{{ url_for('devices_page') }}"  class="{% if active == 'devices' %}active{% endif %}">⚙&nbsp; 디바이스</a></li>
+      <li><a href="{{ url_for('zones_page') }}"    class="{% if active == 'zones' %}active{% endif %}">🏛&nbsp; 구역관리</a></li>
+      <li><a href="{{ url_for('users_page') }}"    class="{% if active == 'users' %}active{% endif %}">👤&nbsp; 사용자</a></li>
+      <li><a href="{{ url_for('notifications_page') }}" class="{% if active == 'notifications' %}active{% endif %}">🔔&nbsp; 알림</a></li>
     </ul>
     <div class="sidebar-footer">
       <span class="user-label">

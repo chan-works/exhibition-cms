@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}사용자 - Exhibition CMS{% endblock %}
+{% block content %}
+<div class="page-title">👤 사용자 관리</div>
+
+<div class="toolbar">
+  <button class="btn btn-primary btn-sm" onclick="openUserModal()">+ 사용자 추가</button>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>아이디</th><th>이름</th><th>역할</th><th>상태</th><th>작업</th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td><strong>{{ u.username }}</strong></td>
+        <td>{{ u.full_name or '-' }}</td>
+        <td><span class="badge" style="background:var(--bg3);">{{ {'admin':'관리자','operator':'운영자','viewer':'열람자'}.get(u.role, u.role) }}</span></td>
+        <td><span class="badge {{'badge-active' if u.is_active else 'badge-inactive'}}">{{ '활성' if u.is_active else '비활성' }}</span></td>
+        <td class="actions">
+          <button class="btn btn-primary btn-xs" onclick="openUserModal({{u|tojson}})">편집</button>
+          <button class="btn btn-warning btn-xs" onclick="openPwModal({{u.id}})">비밀번호</button>
+          {% if u.id != session.get('user_id') %}
+          <button class="btn btn-danger btn-xs" onclick="deleteUser({{u.id}},this)">삭제</button>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- 사용자 추가/편집 모달 -->
+<div class="modal-overlay" id="user-modal">
+  <div class="modal-box">
+    <div class="modal-title" id="user-modal-title">사용자 추가</div>
+    <input type="hidden" id="user-id" value="">
+    <div class="form-group" id="username-group"><label class="form-label">아이디 *</label><input type="text" id="user-username" class="form-control"></div>
+    <div class="form-group" id="password-group"><label class="form-label">비밀번호 *</label><input type="password" id="user-password" class="form-control"></div>
+    <div class="form-group"><label class="form-label">이름</label><input type="text" id="user-fullname" class="form-control"></div>
+    <div class="form-group"><label class="form-label">역할</label>
+      <select id="user-role" class="form-control">
+        <option value="admin">관리자</option>
+        <option value="operator" selected>운영자</option>
+        <option value="viewer">열람자</option>
+      </select>
+    </div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="user-active" checked> 활성</label></div>
+    <div class="modal-footer">
+      <button class="btn btn-sm" style="background:var(--bg3);" onclick="closeUserModal()">취소</button>
+      <button class="btn btn-primary btn-sm" onclick="saveUser()">저장</button>
+    </div>
+  </div>
+</div>
+
+<!-- 비밀번호 변경 모달 -->
+<div class="modal-overlay" id="pw-modal">
+  <div class="modal-box">
+    <div class="modal-title">비밀번호 변경</div>
+    <input type="hidden" id="pw-user-id">
+    <div class="form-group"><label class="form-label">새 비밀번호</label><input type="password" id="pw-new" class="form-control"></div>
+    <div class="modal-footer">
+      <button class="btn btn-sm" style="background:var(--bg3);" onclick="document.getElementById('pw-modal').classList.remove('open')">취소</button>
+      <button class="btn btn-primary btn-sm" onclick="savePw()">변경</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function openUserModal(u) {
+  const isEdit = !!u;
+  document.getElementById('user-modal-title').textContent = isEdit?'사용자 편집':'사용자 추가';
+  document.getElementById('user-id').value = u?u.id:'';
+  document.getElementById('user-username').value = u?u.username:'';
+  document.getElementById('user-fullname').value = u?(u.full_name||''):'';
+  document.getElementById('user-role').value = u?u.role:'operator';
+  document.getElementById('user-active').checked = u?!!u.is_active:true;
+  document.getElementById('username-group').style.display = isEdit?'none':'block';
+  document.getElementById('password-group').style.display = isEdit?'none':'block';
+  document.getElementById('user-modal').classList.add('open');
+}
+function closeUserModal() { document.getElementById('user-modal').classList.remove('open'); }
+[document.getElementById('user-modal'),document.getElementById('pw-modal')].forEach(m=>m.addEventListener('click',e=>{if(e.target===e.currentTarget)e.target.classList.remove('open');}));
+
+async function saveUser() {
+  const id = document.getElementById('user-id').value;
+  if (id) {
+    const res = await apiPost(`/api/user/${id}/update`, {
+      full_name: document.getElementById('user-fullname').value,
+      role: document.getElementById('user-role').value,
+      is_active: document.getElementById('user-active').checked?1:0,
+    });
+    if (res.ok) { showToast('수정됨','ok'); setTimeout(()=>location.reload(),800); }
+    else showToast(res.error||'오류','err');
+  } else {
+    const res = await apiPost('/api/user/create', {
+      username: document.getElementById('user-username').value,
+      password: document.getElementById('user-password').value,
+      full_name: document.getElementById('user-fullname').value,
+      role: document.getElementById('user-role').value,
+    });
+    if (res.ok) { showToast('추가됨','ok'); setTimeout(()=>location.reload(),800); }
+    else showToast(res.error||'오류','err');
+  }
+}
+function openPwModal(id) {
+  document.getElementById('pw-user-id').value=id;
+  document.getElementById('pw-new').value='';
+  document.getElementById('pw-modal').classList.add('open');
+}
+async function savePw() {
+  const id=document.getElementById('pw-user-id').value;
+  const pw=document.getElementById('pw-new').value;
+  if(!pw){showToast('비밀번호를 입력하세요','err');return;}
+  const res=await apiPost(`/api/user/${id}/password`,{password:pw});
+  if(res.ok){showToast('변경됨','ok');document.getElementById('pw-modal').classList.remove('open');}
+  else showToast(res.error||'오류','err');
+}
+async function deleteUser(id,btn){
+  if(!confirm('삭제하시겠습니까?'))return;
+  setLoading(btn,true);
+  const res=await apiPost(`/api/user/${id}/delete`,{});
+  if(res.ok){showToast('삭제됨','ok');setTimeout(()=>location.reload(),800);}
+  else{showToast(res.error||'오류','err');setLoading(btn,false);}
+}
+</script>
+{% endblock %}

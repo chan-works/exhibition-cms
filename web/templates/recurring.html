@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}정기스케줄 - Exhibition CMS{% endblock %}
+{% block content %}
+<div class="page-title">🔁 정기 스케줄</div>
+{% set days = ['월요일','화요일','수요일','목요일','금요일','토요일','일요일'] %}
+
+{% if current_role in ('admin','operator') %}
+<div class="toolbar">
+  <select id="zone-sel" class="form-control" style="width:160px;">
+    {% for z in zones %}<option value="{{ z.id }}">{{ z.name }}</option>{% endfor %}
+  </select>
+  <select id="day-sel" class="form-control" style="width:100px;">
+    {% for d in days %}<option value="{{ loop.index0 }}">{{ d }}</option>{% endfor %}
+  </select>
+  <input type="time" id="time-on" class="form-control" style="width:120px;" placeholder="ON">
+  <input type="time" id="time-off" class="form-control" style="width:120px;" placeholder="OFF">
+  <button class="btn btn-primary btn-sm" onclick="saveRecurring()">저장</button>
+</div>
+{% endif %}
+
+<div class="table-wrap" style="margin-top:16px;">
+  <table>
+    <thead><tr><th>구역</th><th>요일</th><th>ON</th><th>OFF</th><th>상태</th>{% if current_role in ('admin','operator') %}<th>삭제</th>{% endif %}</tr></thead>
+    <tbody>
+      {% for r in recurring %}
+      <tr>
+        <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{{r.zone_color}};margin-right:6px;"></span>{{ r.zone_name }}</td>
+        <td>{{ days[r.day_of_week] }}</td>
+        <td>{{ r.time_on or '-' }}</td>
+        <td>{{ r.time_off or '-' }}</td>
+        <td><span class="badge {{'badge-active' if r.is_enabled else 'badge-inactive'}}">{{ '활성' if r.is_enabled else '비활성' }}</span></td>
+        {% if current_role in ('admin','operator') %}
+        <td><button class="btn btn-danger btn-xs" onclick="deleteRecurring({{r.zone_id}},{{r.day_of_week}},this)">삭제</button></td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="text-dim" style="text-align:center;padding:20px;">등록된 정기 스케줄이 없습니다.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function saveRecurring() {
+  const res = await apiPost('/api/recurring/save', {
+    zone_id: parseInt(document.getElementById('zone-sel').value),
+    day_of_week: parseInt(document.getElementById('day-sel').value),
+    time_on: document.getElementById('time-on').value || null,
+    time_off: document.getElementById('time-off').value || null,
+    is_enabled: 1,
+  });
+  if (res.ok) { showToast('저장됨','ok'); setTimeout(()=>location.reload(),800); }
+  else showToast(res.error||'오류','err');
+}
+async function deleteRecurring(zoneId, dow, btn) {
+  if (!confirm('삭제하시겠습니까?')) return;
+  setLoading(btn, true);
+  const res = await apiPost('/api/recurring/delete', {zone_id:zoneId, day_of_week:dow});
+  if (res.ok) { showToast('삭제됨','ok'); setTimeout(()=>location.reload(),800); }
+  else { showToast(res.error||'오류','err'); setLoading(btn,false); }
+}
+</script>
+{% endblock %}

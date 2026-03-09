@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}구역관리 - Exhibition CMS{% endblock %}
+{% block content %}
+<div class="page-title">🏛 구역 관리</div>
+
+{% if current_role in ('admin','operator') %}
+<div class="toolbar">
+  <button class="btn btn-primary btn-sm" onclick="openZoneModal()">+ 구역 추가</button>
+</div>
+{% endif %}
+
+<div class="zone-grid">
+  {% for z in zones %}
+  <div class="zone-card">
+    <div class="zone-card-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:{{z.color}};flex-shrink:0;"></span>
+        <span class="zone-name">{{ z.name }}</span>
+      </div>
+      {% if current_role in ('admin','operator') %}
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-primary btn-xs" onclick="openZoneModal({{z|tojson}})">편집</button>
+        <button class="btn btn-danger btn-xs" onclick="deleteZone({{z.id}},this)">삭제</button>
+      </div>
+      {% endif %}
+    </div>
+    <div style="padding:10px 14px;font-size:13px;color:var(--text-dim);">{{ z.description or '설명 없음' }}</div>
+  </div>
+  {% else %}
+  <div class="text-dim" style="padding:20px;">등록된 구역이 없습니다.</div>
+  {% endfor %}
+</div>
+
+<!-- 구역 추가/편집 모달 -->
+<div class="modal-overlay" id="zone-modal">
+  <div class="modal-box">
+    <div class="modal-title" id="zone-modal-title">구역 추가</div>
+    <input type="hidden" id="zone-id" value="">
+    <div class="form-group"><label class="form-label">구역명 *</label><input type="text" id="zone-name" class="form-control" placeholder="메인홀"></div>
+    <div class="form-group"><label class="form-label">설명</label><input type="text" id="zone-desc" class="form-control" placeholder="설명 (선택)"></div>
+    <div class="form-group"><label class="form-label">색상</label><input type="color" id="zone-color" value="#2196F3" style="width:60px;height:34px;border:none;background:none;cursor:pointer;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-sm" style="background:var(--bg3);" onclick="closeZoneModal()">취소</button>
+      <button class="btn btn-primary btn-sm" onclick="saveZone()">저장</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function openZoneModal(zone) {
+  document.getElementById('zone-modal-title').textContent = zone ? '구역 편집' : '구역 추가';
+  document.getElementById('zone-id').value = zone ? zone.id : '';
+  document.getElementById('zone-name').value = zone ? zone.name : '';
+  document.getElementById('zone-desc').value = zone ? (zone.description||'') : '';
+  document.getElementById('zone-color').value = zone ? zone.color : '#2196F3';
+  document.getElementById('zone-modal').classList.add('open');
+}
+function closeZoneModal() { document.getElementById('zone-modal').classList.remove('open'); }
+document.getElementById('zone-modal').addEventListener('click',e=>{if(e.target===e.currentTarget)closeZoneModal();});
+
+async function saveZone() {
+  const id = document.getElementById('zone-id').value;
+  const data = { name: document.getElementById('zone-name').value, description: document.getElementById('zone-desc').value, color: document.getElementById('zone-color').value };
+  if (!data.name) { showToast('구역명을 입력하세요','err'); return; }
+  const url = id ? `/api/zone/${id}/update` : '/api/zone/create';
+  const res = await apiPost(url, data);
+  if (res.ok) { showToast(id?'수정됨':'추가됨','ok'); setTimeout(()=>location.reload(),800); }
+  else showToast(res.error||'오류','err');
+}
+async function deleteZone(id, btn) {
+  if (!confirm('구역을 삭제하시겠습니까? 소속 디바이스는 미분류로 변경됩니다.')) return;
+  setLoading(btn,true);
+  const res = await apiPost(`/api/zone/${id}/delete`, {});
+  if (res.ok) { showToast('삭제됨','ok'); setTimeout(()=>location.reload(),800); }
+  else { showToast(res.error||'오류','err'); setLoading(btn,false); }
+}
+</script>
+{% endblock %}

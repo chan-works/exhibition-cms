@@ -38,6 +38,13 @@ def skip_ngrok_warning(response):
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
 
+# 500 에러 상세 로깅
+@app.errorhandler(500)
+def internal_error(e):
+    import traceback
+    logger.error("500 Internal Server Error:\n%s", traceback.format_exc())
+    return f"<pre>Internal Server Error:\n{traceback.format_exc()}</pre>", 500
+
 # 전역 상태
 _db = None
 _scheduler = None
@@ -152,6 +159,181 @@ def devices_page():
         devices=devices,
         zones=zones,
     )
+
+
+@app.route("/calendar")
+@login_required
+def calendar_page():
+    import calendar as cal_mod
+    today = date.today()
+    year = int(request.args.get("year", today.year))
+    month = int(request.args.get("month", today.month))
+    schedules = _db.get_schedules_for_month(year, month)
+    zones = _db.get_all_zones()
+    first_weekday, days_in_month = cal_mod.monthrange(year, month)
+    cal_days = [{"empty": True}] * first_weekday + [
+        {"empty": False, "day": d, "weekday": (first_weekday + d - 1) % 7}
+        for d in range(1, days_in_month + 1)
+    ]
+    return render_template("calendar.html", active="calendar",
+        schedules=schedules, zones=zones, year=year, month=month,
+        today=today.isoformat(), cal_days=cal_days)
+
+
+@app.route("/recurring")
+@login_required
+def recurring_page():
+    zones = _db.get_all_zones()
+    recurring = _db.get_all_recurring_schedules()
+    return render_template("recurring.html", active="recurring",
+        zones=zones, recurring=recurring)
+
+
+@app.route("/api/recurring/save", methods=["POST"])
+@login_required
+@operator_required
+def recurring_save():
+    d = request.get_json() or {}
+    _db.save_recurring_schedule(
+        d["zone_id"], d["day_of_week"],
+        d.get("time_on") or None, d.get("time_off") or None,
+        d.get("is_enabled", 1), d.get("notes", "")
+    )
+    return jsonify(ok=True)
+
+
+@app.route("/api/recurring/delete", methods=["POST"])
+@login_required
+@operator_required
+def recurring_delete():
+    d = request.get_json() or {}
+    _db.delete_recurring_schedule(d["zone_id"], d["day_of_week"])
+    return jsonify(ok=True)
+
+
+@app.route("/zones")
+@login_required
+def zones_page():
+    zones = _db.get_all_zones()
+    return render_template("zones.html", active="zones", zones=zones)
+
+
+@app.route("/api/zone/create", methods=["POST"])
+@login_required
+@operator_required
+def zone_create():
+    d = request.get_json() or {}
+    zid = _db.create_zone(d["name"], d.get("description", ""), d.get("color", "#2196F3"))
+    return jsonify(ok=True, id=zid)
+
+
+@app.route("/api/zone/<int:zone_id>/update", methods=["POST"])
+@login_required
+@operator_required
+def zone_update(zone_id):
+    d = request.get_json() or {}
+    _db.update_zone(zone_id, d["name"], d.get("description", ""), d.get("color", "#2196F3"))
+    return jsonify(ok=True)
+
+
+@app.route("/api/zone/<int:zone_id>/delete", methods=["POST"])
+@login_required
+@operator_required
+def zone_delete(zone_id):
+    _db.delete_zone(zone_id)
+    return jsonify(ok=True)
+
+
+@app.route("/users")
+@login_required
+def users_page():
+    if session.get("role") != "admin":
+        return render_template("access_denied.html", active="users")
+    users = _db.get_all_users()
+    return render_template("users.html", active="users", users=users)
+
+
+@app.route("/api/user/create", methods=["POST"])
+@login_required
+def user_create():
+    if session.get("role") != "admin":
+        return jsonify(error="권한 없음"), 403
+    d = request.get_json() or {}
+    try:
+        _db.create_user(d["username"], d["password"], d.get("full_name", ""), d.get("role", "operator"))
+        return jsonify(ok=True)
+    except Exception as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.route("/api/user/<int:user_id>/update", methods=["POST"])
+@login_required
+def user_update(user_id):
+    if session.get("role") != "admin":
+        return jsonify(error="권한 없음"), 403
+    d = request.get_json() or {}
+    _db.update_user(user_id, d.get("full_name", ""), d.get("role", "operator"), d.get("is_active", 1))
+    return jsonify(ok=True)
+
+
+@app.route("/api/user/<int:user_id>/password", methods=["POST"])
+@login_required
+def user_password(user_id):
+    if session.get("role") != "admin":
+        return jsonify(error="권한 없음"), 403
+    d = request.get_json() or {}
+    _db.update_user_password(user_id, d["password"])
+    return jsonify(ok=True)
+
+
+@app.route("/api/user/<int:user_id>/delete", methods=["POST"])
+@login_required
+def user_delete(user_id):
+    if session.get("role") != "admin":
+        return jsonify(error="권한 없음"), 403
+    if user_id == session.get("user_id"):
+        return jsonify(error="자기 자신은 삭제할 수 없습니다"), 400
+    _db.delete_user(user_id)
+    return jsonify(ok=True)
+
+
+@app.route("/notifications")
+@login_required
+def notifications_page():
+    notifs = _db.get_notifications(limit=100)
+    unread = _db.get_unread_count()
+    return render_template("notifications.html", active="notifications",
+        notifications=notifs, unread=unread)
+
+
+@app.route("/api/notifications/read-all", methods=["POST"])
+@login_required
+def notifications_read_all():
+    _db.mark_all_notifications_read()
+    return jsonify(ok=True)
+
+
+@app.route("/api/schedule/save", methods=["POST"])
+@login_required
+@operator_required
+def schedule_save():
+    d = request.get_json() or {}
+    _db.save_schedule(
+        d["zone_id"], d["date"],
+        d.get("time_on") or None, d.get("time_off") or None,
+        d.get("is_enabled", 1), d.get("is_holiday", 0),
+        d.get("holiday_name", ""), d.get("notes", "")
+    )
+    return jsonify(ok=True)
+
+
+@app.route("/api/schedule/delete", methods=["POST"])
+@login_required
+@operator_required
+def schedule_delete():
+    d = request.get_json() or {}
+    _db.delete_schedule(d["zone_id"], d["date"])
+    return jsonify(ok=True)
 
 
 @app.route("/schedules")

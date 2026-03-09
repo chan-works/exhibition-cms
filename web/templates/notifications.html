@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}알림 - Exhibition CMS{% endblock %}
+{% block content %}
+<div class="page-title">🔔 알림 <span style="font-size:14px;color:var(--text-dim);">(미확인 {{ unread }}개)</span></div>
+
+<div class="toolbar">
+  <button class="btn btn-primary btn-sm" onclick="readAll()">전체 읽음 처리</button>
+</div>
+
+<div style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">
+  {% for n in notifications %}
+  <div class="card" style="padding:12px 16px;border-left:4px solid
+    {{'#2ecc71' if n.notification_type=='success' else '#e74c3c' if n.notification_type=='error' else '#f39c12' if n.notification_type=='warning' else '#1a4a80'}};
+    opacity:{{ '1' if not n.is_read else '0.6' }};">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div style="font-weight:600;margin-bottom:3px;">{{ n.title }}{% if not n.is_read %} <span style="font-size:10px;background:var(--accent);color:white;padding:1px 5px;border-radius:8px;">NEW</span>{% endif %}</div>
+        {% if n.message %}<div style="font-size:12px;color:var(--text-dim);white-space:pre-wrap;">{{ n.message }}</div>{% endif %}
+      </div>
+      <div style="font-size:11px;color:var(--text-dim);white-space:nowrap;margin-left:16px;">{{ n.created_at }}</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="text-dim" style="padding:24px;text-align:center;">알림이 없습니다.</div>
+  {% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function readAll() {
+  const res = await apiPost('/api/notifications/read-all', {});
+  if (res.ok) { showToast('전체 읽음 처리됨','ok'); setTimeout(()=>location.reload(),800); }
+}
+</script>
+{% endblock %}
