@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}스케줄 - Exhibition CMS{% endblock %}
+
+{% block content %}
+<div class="page-title">📅 스케줄</div>
+
+<!-- 월 네비게이션 -->
+<div class="cal-nav">
+  {% set prev_month = month - 1 if month > 1 else 12 %}
+  {% set prev_year  = year if month > 1 else year - 1 %}
+  {% set next_month = month + 1 if month < 12 else 1 %}
+  {% set next_year  = year if month < 12 else year + 1 %}
+
+  <a href="{{ url_for('schedules_page', year=prev_year, month=prev_month) }}"
+     class="btn btn-primary btn-sm">◀</a>
+  <strong style="font-size:15px;">{{ year }}년 {{ month }}월</strong>
+  <a href="{{ url_for('schedules_page', year=next_year, month=next_month) }}"
+     class="btn btn-primary btn-sm">▶</a>
+  <a href="{{ url_for('schedules_page') }}" class="btn btn-sm"
+     style="background:var(--bg2);color:var(--text);border:1px solid var(--border);">
+    이번 달
+  </a>
+</div>
+
+<!-- 캘린더 그리드 -->
+{% set days_of_week = ['월','화','수','목','금','토','일'] %}
+<div class="cal-grid">
+  {% for d in days_of_week %}
+  <div class="cal-day-header"
+       style="{% if loop.index == 7 %}color:#e94560;{% elif loop.index == 6 %}color:#1a7abf;{% endif %}">
+    {{ d }}
+  </div>
+  {% endfor %}
+
+  {# 해당 월 1일의 요일 계산 (Python: weekday() 0=월) #}
+  {% set ns = namespace(day=1) %}
+  {% set first_weekday = (year * 1 + month * 1) %}  {# Jinja에선 import 불가 → 서버에서 계산 #}
+
+  {# schedules를 날짜별로 딕셔너리로 변환 #}
+  {% set sched_map = {} %}
+  {% for s in schedules %}
+    {% if sched_map.update({s.schedule_date: sched_map.get(s.schedule_date, []) + [s]}) %}{% endif %}
+  {% endfor %}
+
+  {% for day_info in cal_days %}
+  {% if day_info.empty %}
+  <div class="cal-day empty"></div>
+  {% else %}
+  {% set date_str = "%04d-%02d-%02d"|format(year, month, day_info.day) %}
+  {% set day_scheds = sched_map.get(date_str, []) %}
+  <div class="cal-day {% if date_str == today %}today{% endif %}">
+    <div class="day-num"
+         style="{% if day_info.weekday == 6 %}color:#e94560;{% elif day_info.weekday == 5 %}color:#1a7abf;{% endif %}">
+      {{ day_info.day }}
+    </div>
+    {% for s in day_scheds %}
+    <div class="cal-event"
+         style="background: {{ s.zone_color }}33; color:{{ s.zone_color }};">
+      {% if s.is_holiday %}
+        🚫 {{ s.zone_name }}: {{ s.holiday_name or '휴관' }}
+      {% elif not s.is_enabled %}
+        ○ {{ s.zone_name }}
+      {% else %}
+        {{ s.zone_name }}
+        {% if s.time_on %}{{ s.time_on }}{% endif %}
+        {% if s.time_off %}-{{ s.time_off }}{% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<!-- 정기 스케줄 -->
+{% if recurring %}
+<div style="margin-top:28px;">
+  <div class="section-title">정기 스케줄 (요일별)</div>
+  {% set days_label = ['월요일','화요일','수요일','목요일','금요일','토요일','일요일'] %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>구역</th>
+          <th>요일</th>
+          <th>ON 시간</th>
+          <th>OFF 시간</th>
+          <th>상태</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recurring %}
+        <tr>
+          <td>
+            <span style="display:inline-block; width:8px; height:8px; border-radius:50%;
+                         background:{{ r.zone_color }}; margin-right:6px;"></span>
+            {{ r.zone_name }}
+          </td>
+          <td>{{ days_label[r.day_of_week] }}</td>
+          <td>{{ r.time_on or '-' }}</td>
+          <td>{{ r.time_off or '-' }}</td>
+          <td>
+            {% if r.is_enabled %}
+              <span class="badge badge-active">활성</span>
+            {% else %}
+              <span class="badge badge-inactive">비활성</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="5" class="text-dim" style="text-align:center; padding:16px;">
+            등록된 정기 스케줄이 없습니다.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

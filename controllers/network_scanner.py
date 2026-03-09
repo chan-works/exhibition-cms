@@ -52,7 +52,8 @@ def check_pjlink(ip: str, port: int = 4352, timeout: float = 1.0) -> bool:
 
 
 def get_mac_from_arp(ip: str) -> str:
-    """Try to get MAC from ARP table."""
+    """Try to get MAC from ARP table using multiple methods."""
+    # Method 1: arp command (Windows / macOS / Linux)
     try:
         if platform.system() == "Windows":
             result = subprocess.run(["arp", "-a", ip], capture_output=True, text=True, timeout=3)
@@ -70,6 +71,83 @@ def get_mac_from_arp(ip: str) -> str:
                     for p in parts:
                         if ":" in p and len(p) == 17:
                             return p.upper()
+    except Exception:
+        pass
+
+    # Method 2: /proc/net/arp (Linux only)
+    try:
+        with open("/proc/net/arp") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4 and parts[0] == ip:
+                    mac = parts[3]
+                    if mac and mac != "00:00:00:00:00:00":
+                        return mac.upper()
+    except Exception:
+        pass
+
+    # Method 3: ip neighbor (Linux)
+    try:
+        result = subprocess.run(
+            ["ip", "neighbor", "show", ip], capture_output=True, text=True, timeout=3
+        )
+        for part in result.stdout.split():
+            if ":" in part and len(part) == 17:
+                return part.upper()
+    except Exception:
+        pass
+
+    return ""
+
+
+def get_mac_from_iptime(router_ip: str, target_ip: str,
+                         username: str = "admin", password: str = "admin") -> str:
+    """
+    iptime 공유기의 DHCP 클라이언트 목록에서 target_ip의 MAC 주소를 조회합니다.
+    PC가 꺼진 상태에도 최근 연결 기록이 있으면 MAC을 찾을 수 있습니다.
+    """
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    import re
+
+    base = f"http://{router_ip}"
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    opener.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    try:
+        # 1단계: 로그인
+        login_body = urllib.parse.urlencode({
+            "tmenu": "main",
+            "act": "session_popup",
+            "username": username,
+            "passwd": password,
+        }).encode()
+        opener.open(f"{base}/sess-bin/timepro.cgi", login_body, timeout=5)
+
+        # 2단계: DHCP 클라이언트 목록 조회
+        dhcp_body = urllib.parse.urlencode({
+            "tmenu": "expertconf",
+            "smenu": "dhcpstatic",
+        }).encode()
+        resp = opener.open(f"{base}/sess-bin/timepro.cgi", dhcp_body, timeout=5)
+        html = resp.read().decode("utf-8", errors="ignore")
+
+        # MAC 주소 패턴 검색 (IP와 함께 나타나는 MAC)
+        # iptime HTML에서 IP와 MAC이 같은 행에 있는 패턴 찾기
+        mac_pattern = re.compile(
+            r'([0-9A-Fa-f]{2}[:\-][0-9A-Fa-f]{2}[:\-][0-9A-Fa-f]{2}'
+            r'[:\-][0-9A-Fa-f]{2}[:\-][0-9A-Fa-f]{2}[:\-][0-9A-Fa-f]{2})'
+        )
+        # target_ip 근처의 MAC 찾기
+        escaped_ip = re.escape(target_ip)
+        # 300자 범위 내에서 IP와 MAC이 같이 있는지 확인
+        for m in re.finditer(escaped_ip, html):
+            nearby = html[max(0, m.start()-200):m.end()+200]
+            mac_m = mac_pattern.search(nearby)
+            if mac_m:
+                return mac_m.group(0).replace("-", ":").upper()
     except Exception:
         pass
     return ""

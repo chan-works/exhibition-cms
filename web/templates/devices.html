@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}디바이스 - Exhibition CMS{% endblock %}
+
+{% block content %}
+<div class="page-title">⚙ 디바이스 관리</div>
+
+<div class="toolbar">
+  <button class="btn btn-primary btn-sm" onclick="pingAll()">🔍 전체 핑 확인</button>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>이름</th>
+        <th>타입</th>
+        <th>구역</th>
+        <th>IP / 호스트</th>
+        <th>MAC (WOL)</th>
+        <th>상태</th>
+        <th>제어</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for dev in devices %}
+      {% set cfg = dev.config if dev.config is mapping else {} %}
+      <tr id="row-{{ dev.id }}">
+        <td>
+          <strong>{{ dev.name }}</strong>
+          {% if not dev.is_enabled %}
+          <span class="badge badge-inactive">비활성</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="device-type-badge" style="font-size:11px;">
+            {{ {'pjlink':'PJLink','computer':'PC','artnet':'ArtNet',
+                'usb_dmx':'USB DMX','osc':'OSC'}.get(dev.device_type, dev.device_type) }}
+          </span>
+        </td>
+        <td class="text-dim">{{ dev.zone_name or '-' }}</td>
+        <td>
+          {% if cfg.host %}
+            <code style="font-size:12px;">{{ cfg.host }}</code>
+          {% elif cfg.port and dev.device_type == 'usb_dmx' %}
+            <code style="font-size:12px;">{{ cfg.port }}</code>
+          {% else %}
+            <span class="text-dim">-</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if dev.device_type == 'computer' %}
+            <div style="display:flex; align-items:center; gap:6px;">
+              <code id="mac-{{ dev.id }}" style="font-size:11px;">
+                {{ cfg.mac or '미설정' }}
+              </code>
+              {% if cfg.host %}
+              <button class="btn btn-primary btn-xs"
+                      title="IP로 MAC 자동 감지"
+                      onclick="detectMac({{ dev.id }}, '{{ cfg.host }}',
+                               '{{ cfg.get('router_ip','') }}',
+                               '{{ cfg.get('router_user','admin') }}',
+                               '{{ cfg.get('router_password','admin') }}', this)">
+                자동감지
+              </button>
+              {% endif %}
+            </div>
+          {% else %}
+            <span class="text-dim">-</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="status-dot status-unknown" id="status-{{ dev.id }}"
+                title="확인 전" style="vertical-align:middle; margin-right:4px;"></span>
+          <span id="status-text-{{ dev.id }}" class="text-dim" style="font-size:12px;">-</span>
+        </td>
+        <td class="actions">
+          {% if current_role in ('admin', 'operator') %}
+          <button class="btn btn-success btn-xs"
+                  onclick="deviceAction({{ dev.id }}, 'on', this)">ON</button>
+          <button class="btn btn-danger btn-xs"
+                  onclick="deviceAction({{ dev.id }}, 'off', this)">OFF</button>
+          {% if dev.device_type == 'computer' and cfg.host %}
+          <button class="btn btn-xs" style="background:#1a4a80;color:white;"
+                  onclick="pingOne({{ dev.id }}, '{{ cfg.host }}', this)">Ping</button>
+          {% endif %}
+          {% else %}
+            <span class="text-dim" style="font-size:12px;">열람 전용</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="7" class="text-dim" style="text-align:center; padding:24px;">
+          등록된 디바이스가 없습니다.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- MAC 감지 결과 모달 -->
+<div class="modal-overlay" id="mac-modal">
+  <div class="modal-box">
+    <div class="modal-title">🔍 MAC 주소 자동 감지</div>
+    <div id="mac-modal-body" style="font-size:14px; line-height:1.7;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary btn-sm" onclick="closeMacModal()">닫기</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── 전체 PC 핑 ──────────────────────────────────────────────────────────────
+const computerDevices = {{ devices | tojson }};
+
+function pingAll() {
+  computerDevices.forEach(dev => {
+    if (dev.device_type === 'computer' && dev.config && dev.config.host) {
+      pingOne(dev.id, dev.config.host);
+    }
+  });
+}
+
+async function pingOne(devId, ip, btn) {
+  if (btn) setLoading(btn, true);
+  try {
+    const res = await apiPost('/api/ping', { ip });
+    updateStatus(devId, res.online);
+    if (btn) showToast(res.online ? `${ip} 온라인` : `${ip} 오프라인`, res.online ? 'ok' : 'err');
+  } catch (e) {
+    if (btn) showToast('핑 실패', 'err');
+  }
+  if (btn) setLoading(btn, false);
+}
+
+function updateStatus(devId, online) {
+  const dot  = document.getElementById(`status-${devId}`);
+  const text = document.getElementById(`status-text-${devId}`);
+  if (!dot) return;
+  dot.classList.remove('status-unknown', 'status-online', 'status-offline');
+  dot.classList.add(online ? 'status-online' : 'status-offline');
+  dot.title = online ? '온라인' : '오프라인';
+  if (text) {
+    text.textContent = online ? '온라인' : '오프라인';
+    text.className = online ? 'text-green' : 'text-red';
+    text.style.fontSize = '12px';
+  }
+}
+
+// ── MAC 자동 감지 ────────────────────────────────────────────────────────────
+let _macDevId = null;
+
+async function detectMac(devId, ip, routerIp, routerUser, routerPass, btn) {
+  _macDevId = devId;
+  setLoading(btn, true);
+  openMacModal(`<div><span class="spinner"></span> ${ip} 의 MAC 주소 감지 중...</div>`);
+  try {
+    const res = await apiPost('/api/detect-mac', {
+      ip,
+      router_ip: routerIp,
+      router_user: routerUser,
+      router_password: routerPass,
+    });
+    if (res.mac) {
+      // MAC 표시 업데이트
+      const macEl = document.getElementById(`mac-${devId}`);
+      if (macEl) macEl.textContent = res.mac;
+      openMacModal(`
+        <p style="margin-bottom:10px;">✅ MAC 주소를 찾았습니다:</p>
+        <code style="font-size:16px; background:#0a0e1a; padding:8px 12px;
+                     border-radius:6px; display:block; text-align:center;">
+          ${res.mac}
+        </code>
+        <p style="margin-top:12px; font-size:12px; color:#606070;">
+          ⚠️ 이 값은 화면에만 표시됩니다. 영구 저장하려면 데스크톱 CMS에서 디바이스를 편집하세요.
+        </p>
+      `);
+    } else {
+      openMacModal(`<p class="text-red">❌ ${res.error}</p>`);
+    }
+  } catch (e) {
+    openMacModal('<p class="text-red">❌ 네트워크 오류</p>');
+  }
+  setLoading(btn, false);
+}
+
+function openMacModal(html) {
+  document.getElementById('mac-modal-body').innerHTML = html;
+  document.getElementById('mac-modal').classList.add('open');
+}
+
+function closeMacModal() {
+  document.getElementById('mac-modal').classList.remove('open');
+}
+
+document.getElementById('mac-modal').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeMacModal();
+});
+
+// 페이지 로드 시 자동 핑
+document.addEventListener('DOMContentLoaded', pingAll);
+</script>
+{% endblock %}

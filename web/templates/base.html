@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Exhibition CMS{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="layout">
+  <!-- 사이드바 -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">Exhibition<br>CMS</div>
+    <ul class="nav-list">
+      <li>
+        <a href="{{ url_for('dashboard') }}"
+           class="{% if active == 'dashboard' %}active{% endif %}">
+          📋&nbsp; 대시보드
+        </a>
+      </li>
+      <li>
+        <a href="{{ url_for('devices_page') }}"
+           class="{% if active == 'devices' %}active{% endif %}">
+          ⚙&nbsp; 디바이스
+        </a>
+      </li>
+      <li>
+        <a href="{{ url_for('schedules_page') }}"
+           class="{% if active == 'schedules' %}active{% endif %}">
+          📅&nbsp; 스케줄
+        </a>
+      </li>
+    </ul>
+    <div class="sidebar-footer">
+      <span class="user-label">
+        {{ current_fullname }}
+        ({{ {'admin':'관리자','operator':'운영자','viewer':'열람자'}.get(current_role, current_role) }})
+      </span>
+      <a href="{{ url_for('logout') }}" class="logout-btn">⏻&nbsp; 로그아웃</a>
+    </div>
+  </nav>
+
+  <!-- 메인 콘텐츠 -->
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<!-- 토스트 컨테이너 -->
+<div id="toast-container"></div>
+
+<script>
+// ── 전역 API 유틸 ──────────────────────────────────────────────────────────
+
+async function apiPost(url, data) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  });
+  return resp.json();
+}
+
+function showToast(msg, type = 'ok') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function setLoading(btn, loading) {
+  if (loading) {
+    btn.dataset.origText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span>';
+    btn.disabled = true;
+  } else {
+    btn.innerHTML = btn.dataset.origText || btn.innerHTML;
+    btn.disabled = false;
+  }
+}
+
+// ── 디바이스 ON/OFF ────────────────────────────────────────────────────────
+
+async function deviceAction(deviceId, action, btn) {
+  setLoading(btn, true);
+  try {
+    const res = await apiPost(`/api/device/${deviceId}/action`, { action });
+    if (res.ok) {
+      showToast(`${action.toUpperCase()} 완료: ${res.message}`, 'ok');
+    } else {
+      showToast(`실패: ${res.error || res.message}`, 'err');
+    }
+  } catch (e) {
+    showToast('네트워크 오류', 'err');
+  }
+  setLoading(btn, false);
+}
+
+// ── 구역 ON/OFF ────────────────────────────────────────────────────────────
+
+async function zoneAction(zoneId, action, btn) {
+  setLoading(btn, true);
+  try {
+    const res = await apiPost(`/api/zone/${zoneId}/action`, { action });
+    if (res.ok) {
+      showToast(`구역 ${action.toUpperCase()} 완료`, 'ok');
+    } else {
+      const fails = (res.results || []).filter(r => !r.ok).map(r => `${r.name}: ${r.message}`).join('\n');
+      showToast(`일부 실패:\n${fails || res.error}`, 'err');
+    }
+  } catch (e) {
+    showToast('네트워크 오류', 'err');
+  }
+  setLoading(btn, false);
+}
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

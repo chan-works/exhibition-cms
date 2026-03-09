@@ -15,6 +15,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
+WEB_PORT = 8080  # 웹 서버 포트 (브라우저 접속용)
+
 
 def main():
     app = QApplication(sys.argv)
@@ -30,6 +32,21 @@ def main():
         QMessageBox.critical(None, "DB 오류", f"데이터베이스 초기화 실패:\n{e}")
         sys.exit(1)
 
+    # ── 웹 서버 백그라운드 시작 (맥북 등 브라우저 접속용) ─────────────────
+    try:
+        from web_server import open_firewall
+        open_firewall(WEB_PORT)
+    except Exception:
+        pass
+    try:
+        from web.server import start_background
+        start_background(db, scheduler=None, port=WEB_PORT)
+        logging.getLogger(__name__).info(
+            "웹 서버 실행 중 → http://0.0.0.0:%d (이 PC의 IP로 접속)", WEB_PORT
+        )
+    except Exception as e:
+        logging.getLogger(__name__).warning("웹 서버 시작 실패 (무시): %s", e)
+
     login = LoginDialog(db)
     if login.exec() != LoginDialog.DialogCode.Accepted:
         sys.exit(0)
@@ -37,6 +54,13 @@ def main():
     user = login.get_user()
     window = MainWindow(db, user)
     window.show()
+
+    # 스케줄러가 생성된 후 웹 서버에 주입
+    try:
+        from web.server import init_app
+        init_app(db, window.scheduler)
+    except Exception:
+        pass
 
     sys.exit(app.exec())
 

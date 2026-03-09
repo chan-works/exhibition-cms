@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>로그인 - Exhibition CMS</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-box">
+    <div class="login-title">Exhibition CMS</div>
+    <div class="login-subtitle">전시장 통합 제어 시스템</div>
+
+    {% if error %}
+    <div class="error-msg">{{ error }}</div>
+    {% endif %}
+
+    <form method="post">
+      <div class="form-group">
+        <label class="form-label" for="username">아이디</label>
+        <input class="form-control" type="text" id="username" name="username"
+               placeholder="username" autocomplete="username" autofocus required>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="password">비밀번호</label>
+        <input class="form-control" type="password" id="password" name="password"
+               placeholder="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit">로그인</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>

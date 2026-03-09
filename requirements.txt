@@ -6,3 +6,5 @@ pyserial>=3.5
 wakeonlan>=3.0.0
 paramiko>=3.3.0
 pyartnet>=1.0.0
+flask>=3.0.0
+pyngrok>=7.0.0

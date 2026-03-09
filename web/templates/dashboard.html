@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}대시보드 - Exhibition CMS{% endblock %}
+
+{% block content %}
+<div class="page-title">📋 대시보드</div>
+
+<!-- 오늘 스케줄 요약 -->
+{% if schedules %}
+<div style="margin-bottom: 20px;">
+  <div class="section-title">오늘의 스케줄 ({{ today }})</div>
+  <div style="display:flex; gap:10px; flex-wrap:wrap;">
+    {% for s in schedules %}
+    <div class="card" style="min-width:200px; padding:12px 16px;">
+      <div style="font-weight:600; margin-bottom:4px;">{{ s.zone_name }}</div>
+      {% if s.is_holiday %}
+        <div class="text-red" style="font-size:12px;">휴관 - {{ s.holiday_name or '휴관' }}</div>
+      {% elif not s.is_enabled %}
+        <div class="text-dim" style="font-size:12px;">비활성</div>
+      {% else %}
+        <div style="font-size:12px; color:#c0d0e0;">
+          {% if s.time_on %}ON&nbsp; {{ s.time_on }}{% endif %}
+          {% if s.time_on and s.time_off %}&nbsp;/&nbsp;{% endif %}
+          {% if s.time_off %}OFF {{ s.time_off }}{% endif %}
+        </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- 구역 카드 그리드 -->
+<div class="section-title">구역별 디바이스 제어</div>
+<div class="zone-grid">
+  {% for zone in zones %}
+  {% set zone_devs = devices_by_zone.get(zone.id, []) %}
+  <div class="zone-card">
+    <div class="zone-card-header">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span class="zone-color-dot" style="background: {{ zone.color }};"></span>
+        <span class="zone-name">{{ zone.name }}</span>
+        <span class="text-dim" style="font-size:12px;">({{ zone_devs|length }}대)</span>
+      </div>
+      <div class="zone-actions">
+        {% if current_role in ('admin', 'operator') %}
+        <button class="btn btn-success btn-xs"
+                onclick="zoneAction({{ zone.id }}, 'on', this)">ALL ON</button>
+        <button class="btn btn-danger btn-xs"
+                onclick="zoneAction({{ zone.id }}, 'off', this)">ALL OFF</button>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="zone-devices">
+      {% if zone_devs %}
+        {% for dev in zone_devs %}
+        {% set cfg = dev.config if dev.config is mapping else {} %}
+        <div class="device-row" id="devrow-{{ dev.id }}">
+          <span class="status-dot status-unknown" id="status-{{ dev.id }}"
+                title="핑 확인 전"></span>
+          <span class="device-name" title="{{ dev.name }}">{{ dev.name }}</span>
+          <span class="device-type-badge">
+            {{ {'pjlink':'PJLink','computer':'PC','artnet':'ArtNet',
+                'usb_dmx':'DMX','osc':'OSC'}.get(dev.device_type, dev.device_type) }}
+          </span>
+          {% if current_role in ('admin', 'operator') %}
+          <div style="display:flex; gap:4px; flex-shrink:0;">
+            <button class="btn btn-success btn-xs"
+                    onclick="deviceAction({{ dev.id }}, 'on', this)">ON</button>
+            <button class="btn btn-danger btn-xs"
+                    onclick="deviceAction({{ dev.id }}, 'off', this)">OFF</button>
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="text-dim" style="font-size:12px; padding:6px 0;">디바이스 없음</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <!-- 구역 없는 디바이스 -->
+  {% if unzoned %}
+  <div class="zone-card">
+    <div class="zone-card-header">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span class="zone-color-dot" style="background:#606070;"></span>
+        <span class="zone-name">미분류</span>
+        <span class="text-dim" style="font-size:12px;">({{ unzoned|length }}대)</span>
+      </div>
+    </div>
+    <div class="zone-devices">
+      {% for dev in unzoned %}
+      <div class="device-row">
+        <span class="status-dot status-unknown" id="status-{{ dev.id }}"></span>
+        <span class="device-name">{{ dev.name }}</span>
+        <span class="device-type-badge">{{ dev.device_type }}</span>
+        {% if current_role in ('admin', 'operator') %}
+        <div style="display:flex; gap:4px;">
+          <button class="btn btn-success btn-xs"
+                  onclick="deviceAction({{ dev.id }}, 'on', this)">ON</button>
+          <button class="btn btn-danger btn-xs"
+                  onclick="deviceAction({{ dev.id }}, 'off', this)">OFF</button>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if not zones and not unzoned %}
+  <div class="text-dim">등록된 구역이나 디바이스가 없습니다.</div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 페이지 로드 시 computer 타입 디바이스 핑 확인
+document.addEventListener('DOMContentLoaded', () => {
+  const computerDevices = {{ devices_by_zone | tojson }};
+  // Flatten all devices
+  const all = [];
+  for (const [zid, devs] of Object.entries(computerDevices)) {
+    for (const d of devs) {
+      if (d.device_type === 'computer' && d.config && d.config.host) {
+        all.push(d);
+      }
+    }
+  }
+  // Ping each
+  all.forEach(dev => pingDevice(dev.id, dev.config.host));
+});
+
+async function pingDevice(devId, ip) {
+  try {
+    const res = await apiPost('/api/ping', { ip });
+    const dot = document.getElementById(`status-${devId}`);
+    if (dot) {
+      dot.classList.remove('status-unknown', 'status-online', 'status-offline');
+      dot.classList.add(res.online ? 'status-online' : 'status-offline');
+      dot.title = res.online ? '온라인' : '오프라인';
+    }
+  } catch (e) {}
+}
+</script>
+{% endblock %}
