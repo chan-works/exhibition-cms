@@ -41,9 +41,15 @@ def main():
     try:
         from web.server import start_background
         start_background(db, scheduler=None, port=WEB_PORT)
-        logging.getLogger(__name__).info(
-            "웹 서버 실행 중 → http://0.0.0.0:%d (이 PC의 IP로 접속)", WEB_PORT
-        )
+        log = logging.getLogger(__name__)
+        log.info("웹 서버 실행 중 → http://0.0.0.0:%d (이 PC의 IP로 접속)", WEB_PORT)
+        try:
+            from web_server import get_tailscale_ip
+            ts = get_tailscale_ip()
+            if ts:
+                log.info("Tailscale 접속 주소 → http://%s:%d", ts, WEB_PORT)
+        except Exception:
+            pass
     except Exception as e:
         logging.getLogger(__name__).warning("웹 서버 시작 실패 (무시): %s", e)
 

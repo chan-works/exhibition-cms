@@ -45,6 +45,36 @@ def get_local_ips():
     return list(dict.fromkeys(ips))  # 중복 제거
 
 
+def get_tailscale_ip() -> str:
+    """Tailscale IP(100.x.x.x) 반환. 설치되지 않았으면 빈 문자열."""
+    # 방법 1: tailscale CLI
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["tailscale", "ip", "--4"],
+            capture_output=True, text=True, timeout=3
+        )
+        ip = result.stdout.strip()
+        if ip.startswith("100."):
+            return ip
+    except Exception:
+        pass
+
+    # 방법 2: 네트워크 인터페이스에서 100.x.x.x 직접 탐색
+    try:
+        import socket
+        hostname = socket.gethostname()
+        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for info in infos:
+            ip = info[4][0]
+            if ip.startswith("100."):
+                return ip
+    except Exception:
+        pass
+
+    return ""
+
+
 def start_ngrok_tunnel(port: int, authtoken: str = None) -> str:
     """
     pyngrok으로 ngrok 터널을 열고 공개 URL을 반환합니다.
@@ -103,18 +133,23 @@ def open_firewall(port: int):
 
 
 def print_banner(port: int, tunnel_url: str = ""):
+    ts_ip = get_tailscale_ip()
     print("\n" + "=" * 54)
     print("  Exhibition CMS 웹 서버")
     print("=" * 54)
-    print(f"  로컬 접속:    http://localhost:{port}")
+    print(f"  로컬 접속:     http://localhost:{port}")
     for ip in get_local_ips():
         print(f"  같은 네트워크: http://{ip}:{port}")
+    if ts_ip:
+        print()
+        print(f"  ★ Tailscale:   http://{ts_ip}:{port}")
+        print(f"    → Tailscale 연결된 어느 기기에서나 접속 가능")
     if tunnel_url:
         print()
         print(f"  ★ 인터넷 접속: {tunnel_url}")
         print(f"    → 맥북, 스마트폰 등 어디서나 접속 가능")
     print()
-    print(f"  기본 계정:    admin / admin123")
+    print(f"  기본 계정:     admin / admin123")
     print("  Ctrl+C 로 종료")
     print("=" * 54 + "\n")
 
